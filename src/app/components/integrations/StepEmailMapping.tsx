@@ -139,18 +139,6 @@ export function StepEmailMapping({
         </span>
 
         <span
-          className={`text-[11px] tabular-nums shrink-0 mt-1 ${
-            f.coverage >= 80
-              ? 'text-emerald-600 dark:text-emerald-400'
-              : f.coverage >= 60
-                ? 'text-gray-500 dark:text-gray-400'
-                : 'text-amber-600 dark:text-amber-400'
-          }`}
-        >
-          {f.coverage}% filled in
-        </span>
-
-        <span
           className={`h-5 w-5 rounded-full border flex items-center justify-center shrink-0 mt-1 transition-colors ${
             on ? 'bg-blue-600 border-blue-600' : 'border-gray-300 dark:border-gray-600'
           }`}
@@ -162,8 +150,8 @@ export function StepEmailMapping({
   };
 
   return (
-    <div className="w-full">
-      <div className="relative">
+    <div className="w-full h-full flex flex-col">
+      <div className="relative shrink-0">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
         <Input
           value={query}
@@ -185,15 +173,15 @@ export function StepEmailMapping({
         )}
       </div>
 
-      {/* `overflow-clip` rather than `hidden`: it rounds the corners without
-          creating a scroll box, which would stop the banner below from sticking. */}
+      {/* A fixed frame: the header, the load-more row and the mapping banner
+          stay put, and only the list of fields between them scrolls. */}
       <div
         role="radiogroup"
         aria-label="Jira email fields"
-        className="mt-3 rounded-xl border border-gray-200 dark:border-gray-700 overflow-clip"
+        className="mt-3 flex-1 min-h-0 flex flex-col rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden"
       >
         {status === 'loading' ? (
-          <div className="divide-y divide-gray-100 dark:divide-gray-800">
+          <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
             {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
                 <span className="h-8 w-8 rounded-lg bg-gray-100 dark:bg-gray-800 shrink-0" />
@@ -209,7 +197,7 @@ export function StepEmailMapping({
             </p>
           </div>
         ) : status === 'error' ? (
-          <div className="flex flex-col items-center justify-center py-14 text-center px-4">
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center py-14 text-center px-4">
             <AlertCircle className="h-6 w-6 text-red-500" />
             <p className="text-sm font-medium text-gray-800 dark:text-gray-200 mt-2.5">
               Couldn't read the project's fields
@@ -223,7 +211,7 @@ export function StepEmailMapping({
             </Button>
           </div>
         ) : items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-14 text-center px-4">
+          <div className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center justify-center py-14 text-center px-4">
             <Search className="h-6 w-6 text-gray-300 dark:text-gray-600" />
             <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mt-2.5">No email fields found</p>
             <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-sm">
@@ -235,20 +223,21 @@ export function StepEmailMapping({
           </div>
         ) : (
           <>
-            <div className="divide-y divide-gray-100 dark:divide-gray-800">
-              <div className="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-800/60 sticky top-0 z-10">
-                <p className="text-[11px] font-semibold tracking-wide text-gray-400 dark:text-gray-500">
-                  {debounced
-                    ? `RESULTS FOR “${debounced}”`
-                    : `EMAIL FIELDS IN ${project ? project.key : 'JIRA'}`}
-                </p>
-                <p className="text-[11px] text-gray-400 dark:text-gray-500">{items.length} of {total}</p>
-              </div>
+            <div className="shrink-0 flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
+              <p className="text-[11px] font-semibold tracking-wide text-gray-400 dark:text-gray-500">
+                {debounced
+                  ? `RESULTS FOR “${debounced}”`
+                  : `EMAIL FIELDS IN ${project ? project.key : 'JIRA'}`}
+              </p>
+              <p className="text-[11px] text-gray-400 dark:text-gray-500">{items.length} of {total}</p>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
               {items.map((f) => <Row key={f.field} f={f} />)}
             </div>
 
             {hasMore && (
-              <div className="px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 flex justify-center">
+              <div className="shrink-0 px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 flex justify-center">
                 <Button
                   variant="outline"
                   size="sm"
@@ -269,13 +258,13 @@ export function StepEmailMapping({
           </>
         )}
 
-        {/* The mapping the choice creates, pinned to the bottom of the list so
-            it stays in view however far down the page you are. */}
+        {/* The mapping the choice creates, held at the foot of the frame so it
+            stays in view however far down the list you scroll. */}
         <div
-          className={`sticky bottom-0 z-10 border-t px-4 py-3 backdrop-blur ${
+          className={`shrink-0 border-t px-4 py-3 ${
             selected
-              ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50/90 dark:bg-emerald-900/40'
-              : 'border-gray-200 dark:border-gray-700 bg-gray-50/90 dark:bg-gray-800/80'
+              ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/40'
+              : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80'
           }`}
         >
           {selected ? (

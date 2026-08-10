@@ -4,6 +4,7 @@ import {
   GripVertical, Type, AlignLeft, CircleDot, UserRound, Mail, Flag, Shapes, CalendarDays,
   CalendarClock, Tags, Boxes, CircleCheck, Link2, Hash, Timer, GitBranch,
   Server, Inbox, AlarmClock, Star, FileText, ShieldCheck, Wallet, Circle, ChevronLeft,
+  CheckSquare, Square,
   type LucideIcon,
 } from 'lucide-react';
 import { Button } from '../ui/button';
@@ -14,8 +15,16 @@ import {
 } from '../../contexts/IntegrationContext';
 import { sampleValue } from './sampleData';
 
-/** Sensible starting set, offered as a shortcut — never applied on its own. */
+/** The fuller set behind "Use recommended" — opt-in, never applied on its own. */
 const RECOMMENDED_BASE = DEFAULT_MAPPINGS.map((m) => m.source);
+
+/**
+ * What arrives ticked. Deliberately minimal: these are the only fields the
+ * dashboard genuinely needs — Summary and Created feed the two required
+ * columns, and Description carries the query itself. Everything else is the
+ * user's call.
+ */
+const STARTER_FIELDS = ['Summary', 'Description', 'Created'];
 
 /** Fields that only exist on certain kinds of Jira project. */
 const TYPE_FIELDS: Record<string, string[]> = {
@@ -52,10 +61,10 @@ const SCAN_PHASES = ['Connecting to project', 'Reading issue schema', 'Discoveri
 
 /**
  * The table keeps a fixed frame — header, body and footer never move — while
- * only the rows inside scroll. Adding a tenth field doesn't push the Continue
- * button off the screen.
+ * only the rows inside scroll. The body takes whatever height is left in the
+ * panel so the step itself never scrolls: one scrollbar, always in the list.
  */
-const BODY_HEIGHT = 'h-[19rem]';
+const BODY_HEIGHT = 'flex-1 min-h-[10rem]';
 
 export function StepSelectFields({
   draft,
@@ -131,6 +140,22 @@ export function StepSelectFields({
     };
   };
 
+  /**
+   * First time through, tick only the handful the dashboard can't work without,
+   * so the step opens with a usable table and still leaves the choosing to the
+   * user. Runs once per setup — `fieldsSeeded` means clearing stays cleared.
+   */
+  useEffect(() => {
+    if (scanning || draft.fieldsSeeded) return;
+    const wanted = [emailSource, ...STARTER_FIELDS].filter(
+      (f) => f && (allFields.includes(f) || f === emailSource),
+    );
+    const add = wanted.filter((f) => !chosenSet.has(f)).map(rowFor);
+    update({ mappings: add.length ? [...mappings, ...add] : mappings, fieldsSeeded: true });
+    // rowFor/recommended are derived from these same inputs, so this is the full set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanning, draft.fieldsSeeded, allFields, emailSource]);
+
   const toggle = (field: string) => {
     if (chosenSet.has(field)) {
       // The email field is set on the previous step; it cannot be dropped here.
@@ -173,6 +198,26 @@ export function StepSelectFields({
   const matchCount = filteredGroups.reduce((n, g) => n + g.fields.length, 0);
   const remaining = allFields.filter((f) => !chosenSet.has(f)).length;
 
+  /**
+   * Select/deselect works on whatever the search is currently showing, so it
+   * reads as "everything I can see" rather than silently touching fields that
+   * are scrolled out of the filter. The email step's field never moves.
+   */
+  const shownFields = filteredGroups.flatMap((g) => g.fields);
+  const togglable = shownFields.filter((f) => f !== emailSource);
+  const shownSelected = togglable.filter((f) => chosenSet.has(f)).length;
+  const allShownSelected = togglable.length > 0 && shownSelected === togglable.length;
+
+  const toggleAllShown = () => {
+    if (allShownSelected) {
+      const drop = new Set(togglable);
+      setMappings(mappings.filter((m) => !drop.has(m.source)));
+    } else {
+      const add = togglable.filter((f) => !chosenSet.has(f)).map(rowFor);
+      setMappings([...mappings, ...add]);
+    }
+  };
+
   const openPicker = () => { setQuery(''); setMode('add'); };
 
   /* ------------------------------- Schema scan ------------------------------ */
@@ -203,8 +248,8 @@ export function StepSelectFields({
   /* ------------------------------ Field browser ----------------------------- */
   if (mode === 'add') {
     return (
-      <div className="w-full">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="w-full h-full flex flex-col">
+        <div className="shrink-0 flex flex-wrap items-center justify-between gap-3">
           <button
             onClick={() => setMode('table')}
             className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
@@ -218,8 +263,8 @@ export function StepSelectFields({
           </p>
         </div>
 
-        <div className="mt-3 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-          <div className="p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
+        <div className="mt-3 flex-1 min-h-0 flex flex-col rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <div className="shrink-0 p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <Input
@@ -240,6 +285,35 @@ export function StepSelectFields({
               )}
             </div>
           </div>
+
+          {matchCount > 0 && (
+            <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                <span className="font-medium text-gray-800 dark:text-gray-200 tabular-nums">
+                  {shownSelected}
+                </span>{' '}
+                of {togglable.length} {query.trim() ? 'matching ' : ''}field
+                {togglable.length === 1 ? '' : 's'} selected
+              </p>
+              <button
+                type="button"
+                onClick={toggleAllShown}
+                className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/25 transition-colors"
+              >
+                {allShownSelected ? (
+                  <>
+                    <Square className="h-3.5 w-3.5" />
+                    Deselect {query.trim() ? 'these' : 'all'}
+                  </>
+                ) : (
+                  <>
+                    <CheckSquare className="h-3.5 w-3.5" />
+                    Select {query.trim() ? 'these' : 'all'}
+                  </>
+                )}
+              </button>
+            </div>
+          )}
 
           <div className={`${BODY_HEIGHT} overflow-y-auto`}>
             {matchCount === 0 ? (
@@ -294,7 +368,7 @@ export function StepSelectFields({
             )}
           </div>
 
-          <div className="px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 flex items-center justify-between gap-3">
+          <div className="shrink-0 px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/40 flex items-center justify-between gap-3">
             <p className="text-xs text-gray-500 dark:text-gray-400">
               Tick a field to add it. Nothing is added until you tick it.
             </p>
@@ -309,8 +383,8 @@ export function StepSelectFields({
 
   /* ------------------------------- Chosen fields ---------------------------- */
   return (
-    <div className="w-full">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="w-full h-full flex flex-col">
+      <div className="shrink-0 flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-gray-600 dark:text-gray-400">
           <span className="font-medium text-gray-900 dark:text-white">
             {mappings.length} field{mappings.length === 1 ? '' : 's'}
@@ -341,8 +415,8 @@ export function StepSelectFields({
       </div>
 
       {/* Fixed table frame — only the rows inside it scroll */}
-      <div className="mt-3 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-        <div className="grid grid-cols-[3.5rem_minmax(0,1fr)_minmax(0,1fr)_5.5rem] gap-3 px-4 py-2 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
+      <div className="mt-3 flex-1 min-h-0 flex flex-col rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+        <div className="shrink-0 grid grid-cols-[3.5rem_minmax(0,1fr)_minmax(0,1fr)_5.5rem] gap-3 px-4 py-2 bg-gray-50 dark:bg-gray-800/60 border-b border-gray-200 dark:border-gray-700">
           {['Order', 'Jira field', 'Sample value', ''].map((h, i) => (
             <p
               key={i}
@@ -462,7 +536,7 @@ export function StepSelectFields({
         </div>
 
         {/* Always-visible way to add more, pinned under the scrolling rows */}
-        <div className="border-t border-gray-200 dark:border-gray-700">
+        <div className="shrink-0 border-t border-gray-200 dark:border-gray-700">
           <button
             onClick={openPicker}
             className="w-full flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium text-blue-600 dark:text-blue-400 bg-blue-50/40 dark:bg-blue-900/10 hover:bg-blue-50 dark:hover:bg-blue-900/25 transition-colors"
@@ -479,7 +553,7 @@ export function StepSelectFields({
       </div>
 
       {mappings.length > 0 && (
-        <p className="text-xs text-gray-500 dark:text-gray-400 mt-3">
+        <p className="shrink-0 text-xs text-gray-500 dark:text-gray-400 mt-3">
           Drag a row to reorder — this is the order your columns appear in. You'll connect them to dashboard
           columns next.
         </p>

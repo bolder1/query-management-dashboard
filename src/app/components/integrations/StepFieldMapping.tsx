@@ -34,20 +34,15 @@ interface Line {
   active: boolean;
 }
 
-/**
- * One row of a column's action menu. Every label says what will happen when
- * it's clicked, and the line underneath says what that means for the dashboard.
- */
+/** One row of a column's action menu — the label alone says what will happen. */
 function MenuItem({
   icon: Icon,
   label,
-  hint,
   onClick,
   danger,
 }: {
   icon: LucideIcon;
   label: string;
-  hint: string;
   onClick: () => void;
   danger?: boolean;
 }) {
@@ -55,23 +50,14 @@ function MenuItem({
     <button
       type="button"
       onClick={onClick}
-      className={`w-full flex items-start gap-2.5 px-3 py-2 text-left transition-colors ${
+      className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] font-medium transition-colors ${
         danger
           ? 'text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20'
           : 'text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-800'
       }`}
     >
-      <Icon className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-      <span className="min-w-0">
-        <span className="block text-[13px] font-medium leading-snug">{label}</span>
-        <span
-          className={`block text-[11px] leading-snug mt-0.5 ${
-            danger ? 'text-red-500/80 dark:text-red-400/70' : 'text-gray-500 dark:text-gray-400'
-          }`}
-        >
-          {hint}
-        </span>
-      </span>
+      <Icon className="h-3.5 w-3.5 shrink-0" />
+      <span className="truncate">{label}</span>
     </button>
   );
 }
@@ -214,17 +200,41 @@ export function StepFieldMapping({
   const patch = (id: string, p: Partial<FieldMap>) =>
     setMappings(mappings.map((m) => (m.id === id ? { ...m, ...p } : m)));
 
+  /**
+   * Connects everything in one pass. An existing free column is always
+   * preferred; only when nothing fits does it create one named after the Jira
+   * field, so the step can always be completed without hand-building columns.
+   */
   const autoConnect = () => {
-    const taken = new Set(connected.map((m) => m.target.trim()));
-    setMappings(
-      mappings.map((m) => {
-        if (m.target.trim()) return m;
-        const guess = GUESSES[m.source] ?? (targets.includes(m.source) ? m.source : '');
-        if (!guess || taken.has(guess) || !targets.includes(guess)) return m;
-        taken.add(guess);
-        return { ...m, target: guess, label: guess };
-      }),
-    );
+    const taken = new Set(mappings.map((m) => m.target.trim()).filter(Boolean));
+    const created: string[] = [];
+
+    const freeName = (base: string) => {
+      if (!taken.has(base)) return base;
+      let n = 2;
+      while (taken.has(`${base} ${n}`)) n += 1;
+      return `${base} ${n}`;
+    };
+
+    const next = mappings.map((m) => {
+      if (m.target.trim()) return m;
+      const guess = GUESSES[m.source];
+      let target =
+        guess && targets.includes(guess) && !taken.has(guess)
+          ? guess
+          : targets.includes(m.source) && !taken.has(m.source)
+            ? m.source
+            : '';
+      if (!target) {
+        target = freeName(m.source);
+        created.push(target);
+      }
+      taken.add(target);
+      return { ...m, target, label: target };
+    });
+
+    if (created.length) setColumns((c) => [...c, ...created]);
+    setMappings(next);
     setArmed(null);
   };
 
@@ -291,9 +301,14 @@ export function StepFieldMapping({
 
         <div className="flex items-center gap-2 shrink-0">
           {unconnected.length > 0 && (
-            <Button variant="outline" size="sm" onClick={autoConnect}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={autoConnect}
+              title="Connects every field, creating a column wherever nothing matches"
+            >
               <Wand2 className="h-3.5 w-3.5 mr-1.5" />
-              Auto-connect
+              Connect all {unconnected.length}
             </Button>
           )}
           <Button
@@ -584,20 +599,19 @@ export function StepFieldMapping({
                         </button>
 
                         {menuOpen && (
-                          <div className="absolute right-1.5 top-9 z-30 w-[17rem] max-w-[calc(100vw-3rem)] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+                          <div className="absolute right-1.5 top-9 z-30 w-56 max-w-[calc(100vw-3rem)] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
                             <p className="px-3 pt-1 pb-1.5 text-[11px] text-gray-400 dark:text-gray-500 truncate">
                               {t}
                             </p>
 
                             {lockedTarget ? (
                               <p className="px-3 pb-2 text-[11px] text-gray-500 dark:text-gray-400 leading-snug">
-                                This column is set on the email step, so it can't be renamed or deleted here.
+                                Set on the email step.
                               </p>
                             ) : (
                               <MenuItem
                                 icon={Pencil}
                                 label="Rename this column"
-                                hint="Change the heading your team sees in Query Results"
                                 onClick={() => startRename(t)}
                               />
                             )}
@@ -607,11 +621,6 @@ export function StepFieldMapping({
                                 <MenuItem
                                   icon={source.visible ? EyeOff : Eye}
                                   label={source.visible ? 'Hide this column' : 'Show this column'}
-                                  hint={
-                                    source.visible
-                                      ? 'Keep importing the data, but leave the column off the table'
-                                      : 'Put the column back on the table'
-                                  }
                                   onClick={() => {
                                     patch(source.id, { visible: !source.visible });
                                     setMenuFor(null);
@@ -620,11 +629,6 @@ export function StepFieldMapping({
                                 <MenuItem
                                   icon={Filter}
                                   label={source.filterable ? 'Stop filtering by this' : 'Let people filter by this'}
-                                  hint={
-                                    source.filterable
-                                      ? 'Removes it from the filter bar on Reports'
-                                      : 'Adds it to the filter bar on Reports'
-                                  }
                                   onClick={() => {
                                     patch(source.id, { filterable: !source.filterable });
                                     setMenuFor(null);
@@ -634,7 +638,6 @@ export function StepFieldMapping({
                                   <MenuItem
                                     icon={Link2Off}
                                     label={`Unlink ${source.source}`}
-                                    hint="Empties the column so you can connect a different Jira field"
                                     onClick={() => { disconnect(source.id); setMenuFor(null); }}
                                   />
                                 )}
@@ -648,11 +651,6 @@ export function StepFieldMapping({
                                   icon={Trash2}
                                   danger
                                   label="Delete this column"
-                                  hint={
-                                    source
-                                      ? `${source.source} stops being imported`
-                                      : 'It disappears from this list'
-                                  }
                                   onClick={() => { removeColumn(t); setMenuFor(null); }}
                                 />
                               </>

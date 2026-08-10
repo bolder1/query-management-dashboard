@@ -35,7 +35,7 @@ const STEP_COPY: { title: string; description: string }[] = [
   {
     title: 'Which project should we sync?',
     description:
-      'One project per connection. Pick one you have synced before, or search your whole Jira site.',
+      'One project per connection. Search your Jira site and pick the one your customer queries live in — you can add more connections later.',
   },
   {
     title: 'Where does the email address come from?',
@@ -92,14 +92,19 @@ export function ConnectionWizard() {
   /** Reconfiguring an existing connection rather than setting one up. */
   const editing = !!connections[draft.providerId];
 
-  const completeMappings = draft.mappings.filter((m) => m.source.trim() && m.target.trim());
+  /** Fields chosen on step 4 that still have no column on step 5. */
+  const unconnected = draft.mappings.filter((m) => m.source.trim() && !m.target.trim());
 
   const blocked = (() => {
     if (step === 0 && !draft.connected) return 'Connect your account to continue.';
     if (step === 1 && draft.projectIds.length === 0) return 'Select a project to continue.';
     if (step === 2 && !draft.emailMapping.sourceField) return 'Choose the field the email comes from.';
     if (step === 3 && draft.mappings.length === 0) return 'Select at least one Jira field.';
-    if (step === 4 && completeMappings.length === 0) return 'Map at least one field to a dashboard column.';
+    // Every chosen field must land somewhere — a half-mapped import silently
+    // drops data, so the wizard holds you here until it's complete.
+    if (step === 4 && unconnected.length > 0) {
+      return `Connect ${unconnected.length} more field${unconnected.length > 1 ? 's' : ''} to continue — or remove ${unconnected.length > 1 ? 'them' : 'it'} on the previous step.`;
+    }
     return '';
   })();
 
@@ -145,6 +150,12 @@ export function ConnectionWizard() {
   const project = MOCK_PROJECTS.find((p) => p.id === draft.projectIds[0]);
   const copy = STEP_COPY[step];
   const progress = ((step + 1) / WIZARD_STEPS.length) * 100;
+  /**
+   * The email and field steps own lists that should scroll inside themselves
+   * rather than scrolling the page behind them, so they get the panel's exact
+   * height to work with. Every other step keeps its natural height.
+   */
+  const fillsPanel = step === 2 || step === 3;
 
   return (
     <div
@@ -287,8 +298,8 @@ export function ConnectionWizard() {
 
         {/* Scrolling content */}
         <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className={L.content}>
-            <header>
+          <div className={`${L.content} ${fillsPanel ? 'h-full flex flex-col' : ''}`}>
+            <header className={fillsPanel ? 'shrink-0' : undefined}>
               <p className="text-xs font-semibold tracking-widest text-blue-600 dark:text-blue-400 uppercase">
                 {WIZARD_STEPS[step].title}
               </p>
@@ -300,7 +311,7 @@ export function ConnectionWizard() {
               </p>
             </header>
 
-            <div className="mt-8">
+            <div className={`mt-8 ${fillsPanel ? 'flex-1 min-h-0' : ''}`}>
               {step === 0 && <StepConnect draft={draft} update={updateDraft} />}
               {step === 1 && <StepProject draft={draft} update={updateDraft} />}
               {step === 2 && <StepEmailMapping draft={draft} update={updateDraft} />}

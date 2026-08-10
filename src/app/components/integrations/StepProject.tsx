@@ -1,11 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, AlertCircle, RotateCw, Check, Folder, Search, X, History } from 'lucide-react';
+import { Loader2, AlertCircle, RotateCw, Check, Folder, Search, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { MOCK_PROJECTS, type ExternalProject, type WizardDraft } from '../../contexts/IntegrationContext';
-
-/** Projects this workspace has synced before — offered first as a shortcut. */
-const RECENT_IDS = ['p1', 'p3'];
 
 const PAGE_SIZE = 6;
 
@@ -25,9 +22,7 @@ function fetchProjects(query: string, page: number): Promise<{ items: ExternalPr
       }
       const q = query.trim().toLowerCase();
       const matches = MOCK_PROJECTS.filter(
-        (p) =>
-          !RECENT_IDS.includes(p.id) &&
-          (!q || p.name.toLowerCase().includes(q) || p.key.toLowerCase().includes(q)),
+        (p) => !q || p.name.toLowerCase().includes(q) || p.key.toLowerCase().includes(q),
       );
       resolve({ items: matches.slice(0, (page + 1) * PAGE_SIZE), total: matches.length });
     }, page === 0 ? 550 : 700);
@@ -76,14 +71,9 @@ export function StepProject({
 
   useEffect(() => { load(debounced, 0); }, [debounced, load]);
 
-  const q = debounced.trim().toLowerCase();
-  const recent = MOCK_PROJECTS.filter(
-    (p) => RECENT_IDS.includes(p.id) &&
-      (!q || p.name.toLowerCase().includes(q) || p.key.toLowerCase().includes(q)),
-  );
   const hasMore = items.length < total;
 
-  const Row = ({ p, used }: { p: ExternalProject; used?: boolean }) => {
+  const Row = ({ p }: { p: ExternalProject }) => {
     const isSelected = p.id === selectedId;
     return (
       <button
@@ -106,15 +96,7 @@ export function StepProject({
         </span>
 
         <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium text-gray-900 dark:text-white truncate">{p.name}</span>
-            {used && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 dark:border-gray-700 px-1.5 py-px text-[10px] font-medium text-gray-500 dark:text-gray-400">
-                <History className="h-2.5 w-2.5" />
-                Synced before
-              </span>
-            )}
-          </span>
+          <span className="block text-sm font-medium text-gray-900 dark:text-white truncate">{p.name}</span>
           <span className="block text-xs text-gray-500 dark:text-gray-400 mt-0.5">
             {p.key} · {p.type} · {p.issues.toLocaleString()} issues
           </span>
@@ -184,27 +166,22 @@ export function StepProject({
               Retry
             </Button>
           </div>
-        ) : items.length === 0 && recent.length === 0 ? (
+        ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-14 text-center px-4">
             <Search className="h-6 w-6 text-gray-300 dark:text-gray-600" />
-            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mt-2.5">No projects found</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              Nothing matches “{debounced}”. Try a shorter search or the project key.
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mt-2.5">
+              {debounced ? 'No projects found' : 'No projects on this site'}
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-sm">
+              {debounced
+                ? `Nothing matches “${debounced}”. Try a shorter search or the project key.`
+                : 'This Atlassian account cannot browse any Jira projects yet. Ask an admin for access, or switch account on the previous step.'}
             </p>
           </div>
         ) : (
           <>
             <div className="max-h-[26rem] overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
-              {recent.length > 0 && (
-                <>
-                  <p className="px-4 py-2 text-[11px] font-semibold tracking-wide text-gray-400 dark:text-gray-500 bg-gray-50 dark:bg-gray-800/60">
-                    SYNCED BEFORE
-                  </p>
-                  {recent.map((p) => <Row key={p.id} p={p} used />)}
-                </>
-              )}
-
-              <div className="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-800/60">
+              <div className="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-800/60 sticky top-0">
                 <p className="text-[11px] font-semibold tracking-wide text-gray-400 dark:text-gray-500">
                   {debounced ? `RESULTS FOR “${debounced}”` : 'ALL PROJECTS'}
                 </p>

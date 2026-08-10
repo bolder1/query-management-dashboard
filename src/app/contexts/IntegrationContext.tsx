@@ -397,6 +397,11 @@ export interface WizardDraft {
   issueTypes: string[];
   mappings: FieldMap[];
   emailMapping: EmailMapping;
+  /**
+   * Whether the field step has already offered its starting selection. It only
+   * ever seeds once, so clearing the table doesn't refill behind the user.
+   */
+  fieldsSeeded: boolean;
   /** Wall-clock of the last edit, shown on the resume card. */
   updatedAt: string;
 }
@@ -448,9 +453,10 @@ export function emptyDraft(providerId: ProviderId): WizardDraft {
     connected: false,
     projectIds: [],
     issueTypes: ['Bug', 'Task', 'Service Request'],
-    // No fields to begin with — the field step starts empty and the user
-    // decides how many to add.
+    // The field step seeds its own starting selection once it knows the
+    // project's schema; until then there is nothing to show.
     mappings: [],
+    fieldsSeeded: false,
     emailMapping: defaultEmailMapping(),
     updatedAt: new Date().toISOString(),
   };
@@ -564,6 +570,8 @@ export function IntegrationProvider({
       projectIds: existing.config.projects.slice(0, 1).map((p) => p.id),
       issueTypes: existing.config.issueTypes,
       mappings: existing.config.mappings.map((m) => ({ ...m })),
+      // Reconfiguring starts from a real selection, so never re-seed over it.
+      fieldsSeeded: true,
       emailMapping: { ...existing.config.emailMapping },
     });
   }, []);
