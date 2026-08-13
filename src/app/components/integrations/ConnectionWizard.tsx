@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { X, Check, Info, Save, Lock, ShieldCheck } from 'lucide-react';
+import { X, Check, Info, Save, Lock, ShieldCheck, ArrowRight } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Trail } from '../ui/trail';
 import { toast } from 'sonner';
@@ -106,6 +106,42 @@ export function ConnectionWizard() {
     if (lockedReason(s)) return;
     updateDraft({ step: s, sequence: [s] });
   };
+
+  /**
+   * One forward button for the whole flow.
+   *
+   * The fields step is three beats in one step, and each used to carry its own
+   * Next inside the panel — directly above the footer's Save, both primary,
+   * both bottom-right-ish. Two buttons that look the same and mean different
+   * things is a coin toss. So the footer's button walks the beats and only
+   * becomes Save on the last of them.
+   */
+  const forward = (() => {
+    if (step !== 2) return null;
+    // The step writes its beat down on the way in; until it has, there is
+    // nothing to walk to and the button is just Save.
+    const beat = draft.beat;
+    if (!beat) return null;
+    if (beat === 'email') {
+      const chosen = draft.mappings.some((m) => m.target === 'Email' && m.source.trim());
+      return {
+        label: 'Next: choose fields',
+        disabled: !chosen,
+        hint: chosen ? '' : 'Pick the field that carries the email',
+        go: () => updateDraft({ beat: 'fields' as const }),
+      };
+    }
+    if (beat === 'fields') {
+      const picked = draft.mappings.filter((m) => m.target !== 'Email' && m.source.trim()).length;
+      return {
+        label: 'Turn these into columns',
+        disabled: picked === 0,
+        hint: picked ? '' : 'Tick at least one field',
+        go: () => updateDraft({ beat: 'name' as const }),
+      };
+    }
+    return null;
+  })();
 
   const save = () => {
     const providerId = draft.providerId;
@@ -236,10 +272,17 @@ export function ConnectionWizard() {
             <Button variant="ghost" size="sm" onClick={cancelWizard}>
               Cancel
             </Button>
-            <Button disabled={!!blocked} onClick={save}>
-              <Check className="h-3.5 w-3.5 mr-1.5" />
-              Save
-            </Button>
+            {forward ? (
+              <Button disabled={forward.disabled} title={forward.hint} onClick={forward.go}>
+                {forward.label}
+                <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
+              </Button>
+            ) : (
+              <Button disabled={!!blocked} onClick={save}>
+                <Check className="h-3.5 w-3.5 mr-1.5" />
+                Save
+              </Button>
+            )}
           </div>
         </div>
       </footer>

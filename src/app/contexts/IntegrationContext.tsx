@@ -433,6 +433,13 @@ export interface WizardDraft {
    * "preview the result" is just this flag.
    */
   reviewing?: boolean;
+  /**
+   * Which of the fields step's three beats is showing. It lives here rather
+   * than inside the step because the wizard's own footer drives it — one
+   * forward button for the whole flow, instead of a Next inside the panel and
+   * a Save underneath it competing for the same click.
+   */
+  beat?: 'email' | 'fields' | 'name';
   /** Wall-clock of the last edit, shown on the resume card. */
   updatedAt: string;
 }

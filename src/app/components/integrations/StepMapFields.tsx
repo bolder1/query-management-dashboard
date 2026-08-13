@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check, X, Search, Wand2, ArrowRight, Mail, Sparkles, GripVertical, Pencil, Trash2,
-  Loader2, Filter, Eye, EyeOff, Table2, AlertTriangle, CheckSquare,
+  Loader2, Filter, Eye, EyeOff, Table2, AlertTriangle, CheckSquare, ChevronDown,
   Square, Columns3,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Pill } from '../ui/pill';
 import {
-  REQUIRED_COLUMNS, EMAIL_TARGET, EMAIL_SOURCE_FIELDS, MOCK_PROJECTS,
+  REQUIRED_COLUMNS, TARGET_FIELDS, EMAIL_TARGET, EMAIL_SOURCE_FIELDS, MOCK_PROJECTS,
   type FieldMap, type WizardDraft,
 } from '../../contexts/IntegrationContext';
 import { sampleValue } from './sampleData';
@@ -100,12 +100,28 @@ export function StepMapFields({
   const project = MOCK_PROJECTS.find((p) => p.id === draft.projectIds[0]);
   const emailRow = mappings.find((m) => m.target === EMAIL_TARGET);
 
-  /** Where a returning user picks up: whichever beat still has a question in it. */
-  const [phase, setPhase] = useState<Phase>(() => {
-    if (!emailRow?.source) return 'email';
-    if (mappings.filter((m) => m.source.trim()).length <= 1) return 'fields';
-    return 'name';
-  });
+  /**
+   * The open beat lives in the draft, not here: the wizard's own footer is what
+   * moves between them now, so one forward button carries the whole flow
+   * instead of a Next inside this panel competing with the Save underneath it.
+   *
+   * Where a returning user picks up is worked out once, on the way in, and then
+   * written down. Leaving it derived meant it kept re-deriving: tick a field on
+   * beat two and the answer to "which beat has a question left in it" changed
+   * under you, so the screen jumped to beat three on its own.
+   */
+  const phase: Phase = draft.beat ?? 'email';
+  const setPhase = (b: Phase) => update({ beat: b });
+
+  useEffect(() => {
+    if (draft.beat) return;
+    update({
+      beat: !emailRow?.source ? 'email'
+        : mappings.filter((m) => m.source.trim()).length <= 1 ? 'fields'
+        : 'name',
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /** The dashboard preview, on demand rather than always underneath. */
   const [preview, setPreview] = useState(false);
@@ -161,9 +177,15 @@ export function StepMapFields({
    * The hand-off from picking to naming. Columns land one at a time so the
    * table builds itself in front of you, rather than a finished table appearing
    * the instant you press a button.
+   *
+   * Triggered by the beat changing rather than by a click, because the click
+   * now happens in the wizard's footer, a component away.
    */
-  const startNaming = () => {
-    setPhase('name');
+  const prevPhase = useRef<Phase>(phase);
+  useEffect(() => {
+    const came = prevPhase.current;
+    prevPhase.current = phase;
+    if (phase !== 'name' || came === 'name') return;
     setRevealed(0);
     timers.current.forEach(window.clearTimeout);
     timers.current = [];
@@ -171,17 +193,40 @@ export function StepMapFields({
     for (let i = 1; i <= total; i++) {
       timers.current.push(window.setTimeout(() => setRevealed(i === total ? null : i), 110 * i));
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   /* ------------------------------ Beat three ------------------------------- */
 
+  /** The three the product depends on keep their role; only their name moves. */
+  const renamed = (m: FieldMap, name: string) =>
+    REQUIRED_COLUMNS.includes(m.target) ? { ...m, label: name } : { ...m, target: name, label: name };
+
   const rename = (id: string, name: string) => {
+    commit(mappings.map((m) => (m.id === id ? renamed(m, name) : m)));
+  };
+
+  /**
+   * Take a name another column already has. The other one cannot simply keep
+   * it — two columns with one name is not a table — so it falls back to its own
+   * Jira field's name, deduped, and flashes so the swap is visible rather than
+   * something you discover later in the preview.
+   */
+  const steal = (id: string, name: string, from: FieldMap) => {
+    const used = new Set(
+      mappings.filter((m) => m.id !== id && m.id !== from.id).map((m) => (m.label || m.target).toLowerCase()),
+    );
+    used.add(name.toLowerCase());
+    let fallback = from.source;
+    let n = 2;
+    while (used.has(fallback.toLowerCase())) fallback = `${from.source} (${n++})`;
+
     commit(mappings.map((m) => {
-      if (m.id !== id) return m;
-      // The three the product depends on keep their role; only their name moves.
-      const locked = REQUIRED_COLUMNS.includes(m.target);
-      return locked ? { ...m, label: name } : { ...m, target: name, label: name };
+      if (m.id === id) return renamed(m, name);
+      if (m.id === from.id) return renamed(m, fallback);
+      return m;
     }));
+    flash(id, from.id);
   };
 
   const patch = (id: string, p: Partial<FieldMap>) =>
@@ -276,7 +321,6 @@ export function StepMapFields({
           <EmailPhase
             chosen={emailRow?.source ?? ''}
             onPick={setEmailSource}
-            onNext={() => setPhase('fields')}
           />
         )}
         {phase === 'fields' && (
@@ -286,7 +330,6 @@ export function StepMapFields({
             emailField={emailRow?.source ?? ''}
             selected={selected}
             onChange={setSelection}
-            onNext={startNaming}
           />
         )}
         {phase === 'name' && (
@@ -296,6 +339,7 @@ export function StepMapFields({
             revealing={revealed !== null}
             missingRequired={missingRequired}
             onRename={rename}
+            onSteal={steal}
             onPatch={patch}
             onRemove={remove}
             onReorder={reorder}
@@ -378,11 +422,10 @@ function PhaseRail({
  * carries how often it is filled in, and the list is ordered by that.
  */
 function EmailPhase({
-  chosen, onPick, onNext,
+  chosen, onPick,
 }: {
   chosen: string;
   onPick: (field: string) => void;
-  onNext: () => void;
 }) {
   const [query, setQuery] = useState('');
   const ranked = useMemo(() => {
@@ -491,7 +534,7 @@ function EmailPhase({
         )}
       </div>
 
-      <footer className="shrink-0 flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+      <footer className="shrink-0 px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
         <p className="text-[13px] min-w-0 truncate">
           {chosen ? (
             <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
@@ -502,10 +545,6 @@ function EmailPhase({
             <span className="text-gray-500 dark:text-gray-400">Pick one to carry on.</span>
           )}
         </p>
-        <Button size="sm" disabled={!chosen} onClick={onNext} className="shrink-0">
-          Next: choose fields
-          <ArrowRight className="h-3.5 w-3.5 ml-1.5" />
-        </Button>
       </footer>
     </>
   );
@@ -520,14 +559,13 @@ function EmailPhase({
  * exactly that.
  */
 function FieldsPhase({
-  catalog, project, emailField, selected, onChange, onNext,
+  catalog, project, emailField, selected, onChange,
 }: {
   catalog: { name: string; fields: string[] }[];
   project?: string;
   emailField: string;
   selected: Set<string>;
   onChange: (fields: string[]) => void;
-  onNext: () => void;
 }) {
   const [query, setQuery] = useState('');
 
@@ -674,14 +712,10 @@ function FieldsPhase({
         )}
       </div>
 
-      <footer className="shrink-0 flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+      <footer className="shrink-0 px-4 py-2.5 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
         <p className="text-[13px] text-gray-500 dark:text-gray-400 min-w-0 truncate">
           {emailField && `${emailField} is already coming across as your Email column.`}
         </p>
-        <Button size="sm" disabled={selected.size === 0} onClick={onNext} className="shrink-0">
-          <Wand2 className="h-3.5 w-3.5 mr-1.5" />
-          Turn these into columns
-        </Button>
       </footer>
     </>
   );
@@ -705,18 +739,24 @@ function FieldsPhase({
  */
 function NamePhase({
   mappings, total, revealing, missingRequired,
-  onRename, onPatch, onRemove, onReorder, onBackToFields,
+  onRename, onSteal, onPatch, onRemove, onReorder, onBackToFields,
 }: {
   mappings: FieldMap[];
   total: number;
   revealing: boolean;
   missingRequired: string[];
   onRename: (id: string, name: string) => void;
+  onSteal: (id: string, name: string, from: FieldMap) => void;
   onPatch: (id: string, patch: Partial<FieldMap>) => void;
   onRemove: (id: string) => void;
   onReorder: (fromId: string, toId: string) => void;
   onBackToFields: () => void;
 }) {
+  /** Names the dashboard already understands, plus anything invented so far. */
+  const standard = useMemo(
+    () => [...new Set([...TARGET_FIELDS, ...mappings.map((m) => m.label || m.target)])],
+    [mappings],
+  );
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   // Mirrors dragId so the drop handler never reads a stale render's closure.
@@ -777,7 +817,15 @@ function NamePhase({
               fresh={revealing && i === mappings.length - 1}
               dragging={dragId === m.id}
               dropTarget={overId === m.id && !!dragId && dragId !== m.id}
+              /* Every other row's name, so the picker can say who holds what. */
+              taken={new Map(
+                mappings
+                  .filter((o) => o.id !== m.id)
+                  .map((o) => [(o.label || o.target).toLowerCase(), o] as const),
+              )}
+              standard={standard}
               onRename={(v) => onRename(m.id, v)}
+              onSteal={(v, from) => onSteal(m.id, v, from)}
               onPatch={(p) => onPatch(m.id, p)}
               onRemove={() => onRemove(m.id)}
               onDragStart={() => { dragRef.current = m.id; setDragId(m.id); }}
@@ -798,13 +846,17 @@ function NamePhase({
 
 /** One pairing: their field, an arrow, your column, and what you can do to it. */
 function MapRow({
-  row, index, required, fresh, dragging, dropTarget,
-  onRename, onPatch, onRemove,
+  row, index, required, fresh, dragging, dropTarget, taken, standard,
+  onRename, onSteal, onPatch, onRemove,
   onDragStart, onDragOver, onDrop, onDragEnd,
 }: {
   row: FieldMap;
   index: number;
   required: boolean;
+  /** Every other row's name, lower-cased, mapped to the row holding it. */
+  taken: Map<string, FieldMap>;
+  standard: string[];
+  onSteal: (name: string, from: FieldMap) => void;
   fresh: boolean;
   dragging: boolean;
   dropTarget: boolean;
@@ -816,41 +868,18 @@ function MapRow({
   onDrop: () => void;
   onDragEnd: () => void;
 }) {
-  const [value, setValue] = useState(row.label || row.target);
-  /** Dragging is suspended while the caret is in the name box. */
-  const [typing, setTyping] = useState(false);
-  const input = useRef<HTMLInputElement>(null);
-  /** What we last pushed up, so an echo of our own typing is not treated as news. */
-  const sent = useRef(row.label || row.target);
-
-  useEffect(() => {
-    const incoming = row.label || row.target;
-    if (incoming !== sent.current) { sent.current = incoming; setValue(incoming); }
-  }, [row.label, row.target]);
-
-  /**
-   * Every keystroke, not on blur. The heading in the table below changes as you
-   * type, which is the point of having it there. A momentarily empty box stays
-   * local: it is mid-edit, not a column called "".
-   */
-  const type = (v: string) => {
-    setValue(v);
-    const clean = v.trim();
-    if (!clean) return;
-    sent.current = clean;
-    onRename(clean);
-  };
-
+  /** Dragging is suspended while the name picker is open. */
+  const [naming, setNaming] = useState(false);
   const name = row.label || row.target;
 
   return (
     <li
-      draggable={!typing}
+      draggable={!naming}
       onDragStart={(e) => { onDragStart(); e.dataTransfer.effectAllowed = 'move'; }}
       onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; onDragOver(); }}
       onDrop={(e) => { e.preventDefault(); onDrop(); }}
       onDragEnd={onDragEnd}
-      className={`group transition-colors duration-300 ${typing ? '' : 'cursor-grab active:cursor-grabbing'} ${
+      className={`group transition-colors duration-300 ${naming ? '' : 'cursor-grab active:cursor-grabbing'} ${
         dragging
           ? 'opacity-40'
           : dropTarget
@@ -880,27 +909,19 @@ function MapRow({
         <ArrowRight className="hidden md:block h-4 w-4 text-gray-300 dark:text-gray-600" aria-hidden />
 
         {/* Yours */}
-        <span className="col-span-3 md:col-span-1 flex items-center gap-2 min-w-0 pl-[1.75rem] md:pl-0">
-          <Input
-            ref={input}
-            value={value}
-            onChange={(e) => type(e.target.value)}
-            onFocus={() => setTyping(true)}
-            onMouseDown={() => setTyping(true)}
-            onBlur={() => { setTyping(false); if (!value.trim()) setValue(name); }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); }
-              if (e.key === 'Escape') { e.stopPropagation(); (e.target as HTMLInputElement).blur(); }
-            }}
-            aria-label={`Column name for ${row.source}`}
-            className="h-8 text-[13px] font-medium bg-white dark:bg-gray-900"
-          />
-          {required && <Pill tone="neutral" size="xs">Required</Pill>}
-        </span>
+        <ColumnNameCell
+          row={row}
+          required={required}
+          taken={taken}
+          standard={standard}
+          onOpenChange={setNaming}
+          onRename={onRename}
+          onSteal={onSteal}
+        />
 
         {/* Options — icons on the row rather than behind a menu. */}
         <span className="flex items-center gap-0.5 justify-self-end">
-          <RowIcon icon={Pencil} label={`Rename ${name}`} onClick={() => input.current?.select()} />
+          <RowIcon icon={Pencil} label={`Rename ${name}`} onClick={() => setNaming(true)} />
           <RowIcon
             icon={row.visible ? Eye : EyeOff}
             label={row.visible ? `Hide ${name} from the table` : `Show ${name} in the table`}
@@ -1088,5 +1109,177 @@ function PreviewDialog({
         </footer>
       </div>
     </div>
+  );
+}
+
+/**
+ * The column name: a dropdown that is also a text box.
+ *
+ * A bare input made every column a blank sheet, when in practice most of them
+ * want one of ten names the dashboard already understands — and typing one of
+ * those by hand is how you end up with two columns called Priority. So the
+ * standard names are on offer, the box underneath takes anything else, and both
+ * routes go through the same duplicate check.
+ *
+ * Two names are never allowed to collide. Typing one that is taken refuses and
+ * says who has it; picking a taken one from the list asks first, because that
+ * is a deliberate move — and then says plainly what it costs: the column that
+ * held the name is left needing a new one, and whatever was feeding it is no
+ * longer feeding that column on your dashboard.
+ */
+function ColumnNameCell({
+  row, required, taken, standard, onOpenChange, onRename, onSteal,
+}: {
+  row: FieldMap;
+  required: boolean;
+  /** Every other row's name, lower-cased, mapped to the row holding it. */
+  taken: Map<string, FieldMap>;
+  standard: string[];
+  onOpenChange: (open: boolean) => void;
+  onRename: (name: string) => void;
+  onSteal: (name: string, from: FieldMap) => void;
+}) {
+  const name = row.label || row.target;
+  const [open, setOpen] = useState(false);
+  const [typed, setTyped] = useState(name);
+  const [confirm, setConfirm] = useState<{ name: string; from: FieldMap } | null>(null);
+
+  useEffect(() => { setTyped(name); }, [name]);
+  useEffect(() => {
+    onOpenChange(open);
+    if (!open) { setTyped(name); setConfirm(null); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const clash = (candidate: string) => taken.get(candidate.trim().toLowerCase());
+  const typedClash = typed.trim() && typed.trim() !== name ? clash(typed) : undefined;
+
+  const commitTyped = () => {
+    const v = typed.trim();
+    if (!v || v === name) { setOpen(false); return; }
+    const held = clash(v);
+    if (held) { setConfirm({ name: v, from: held }); return; }
+    onRename(v);
+    setOpen(false);
+  };
+
+  const pick = (option: string) => {
+    if (option === name) { setOpen(false); return; }
+    const held = clash(option);
+    if (held) { setConfirm({ name: option, from: held }); return; }
+    onRename(option);
+    setOpen(false);
+  };
+
+  return (
+    <span className="col-span-3 md:col-span-1 flex items-center gap-2 min-w-0 pl-[1.75rem] md:pl-0">
+      <span className="relative min-w-0 flex-1">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label={`Column name for ${row.source} — currently ${name}`}
+          className={`w-full flex items-center gap-1.5 rounded-md border px-2.5 h-8 text-left transition-colors ${
+            open
+              ? 'border-blue-500 ring-2 ring-blue-500/20'
+              : 'border-gray-200 dark:border-gray-700 hover:border-blue-400'
+          } bg-white dark:bg-gray-900`}
+        >
+          <span className="text-[13px] font-medium text-gray-900 dark:text-white truncate flex-1">
+            {name}
+          </span>
+          <ChevronDown className={`h-3.5 w-3.5 text-gray-400 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+
+        {open && (
+          <div className="absolute z-30 left-0 right-0 mt-1 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-lg overflow-hidden">
+            {confirm ? (
+              /* The one destructive move on this screen, so it is spelled out. */
+              <div className="p-3">
+                <p className="flex items-start gap-2 text-[13px] text-gray-900 dark:text-white">
+                  <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-px" />
+                  <span>
+                    <span className="font-medium">{confirm.name}</span> is already used by{' '}
+                    <span className="font-medium">{confirm.from.source}</span>.
+                  </span>
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5 leading-relaxed">
+                  Move the name here and {confirm.from.source} loses it — that column will need a new
+                  name, and nothing on your dashboard will be called {confirm.name} except this one.
+                </p>
+                <div className="flex items-center gap-2 mt-3">
+                  <Button
+                    size="sm"
+                    className="h-8"
+                    onClick={() => { onSteal(confirm.name, confirm.from); setConfirm(null); setOpen(false); }}
+                  >
+                    Move it here
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-8" onClick={() => setConfirm(null)}>
+                    Keep as is
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <form
+                  className="p-2 border-b border-gray-100 dark:border-gray-800"
+                  onSubmit={(e) => { e.preventDefault(); commitTyped(); }}
+                >
+                  <Input
+                    autoFocus
+                    value={typed}
+                    onChange={(e) => setTyped(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } }}
+                    aria-invalid={!!typedClash}
+                    placeholder="Name this column"
+                    className={`h-8 text-[13px] ${typedClash ? 'border-red-400 focus-visible:ring-red-500/30' : ''}`}
+                  />
+                  {typedClash && (
+                    <p className="flex items-start gap-1.5 text-xs text-red-600 dark:text-red-400 mt-1.5">
+                      <AlertTriangle className="h-3 w-3 shrink-0 mt-px" />
+                      Already used by {typedClash.source}. Pick it from the list to move it here.
+                    </p>
+                  )}
+                </form>
+
+                <div className="max-h-56 overflow-y-auto">
+                  <p className="px-3 py-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/70 border-b border-gray-100 dark:border-gray-800">
+                    {required ? 'Rename this column' : 'Columns your dashboard knows'}
+                  </p>
+                  {standard.map((option) => {
+                    const held = clash(option);
+                    const mine = option.toLowerCase() === name.toLowerCase();
+                    return (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => pick(option)}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-left transition-colors ${
+                          mine ? 'bg-emerald-50 dark:bg-emerald-900/25' : 'hover:bg-blue-50/60 dark:hover:bg-blue-900/20'
+                        }`}
+                      >
+                        {mine
+                          ? <Check className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                          : <span className="h-3.5 w-3.5 shrink-0" />}
+                        <span className="text-[13px] text-gray-800 dark:text-gray-200 truncate flex-1">
+                          {option}
+                        </span>
+                        {held && !mine && (
+                          <span className="text-xs text-amber-600 dark:text-amber-400 shrink-0">
+                            already used
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </span>
+      {required && <Pill tone="neutral" size="xs">Required</Pill>}
+    </span>
   );
 }
