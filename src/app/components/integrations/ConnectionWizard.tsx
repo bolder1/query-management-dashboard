@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { X, Check, Info, Save, Lock } from 'lucide-react';
+import { X, Check, Info, Save, Lock, ShieldCheck } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Trail } from '../ui/trail';
 import { toast } from 'sonner';
@@ -130,10 +130,18 @@ export function ConnectionWizard() {
   };
 
   /**
-   * The mapping step wants the whole width for its list-plus-preview; the two
-   * short steps before it want a readable column in the middle of the screen.
+   * How much screen each step should take.
+   *
+   * They were all pinned to a 56rem column, which suited the credentials form
+   * and starved the two pickers — twenty-eight projects in a single file with
+   * a hand's width of nothing beside them. Now each step gets the shape of its
+   * own content: the pickers go full-bleed and lay their options out in a grid,
+   * and Connect keeps a readable measure but pairs the form with an aside so
+   * the bottom two thirds of the screen are not simply blank.
    */
-  const wide = step === 2;
+  const container = step === 0 ? 'mx-auto max-w-6xl' : 'lg:px-10';
+  /** The mapping step states its own title, inline with its phase rail. */
+  const ownsTitle = step === 2;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-white dark:bg-gray-950">
@@ -172,8 +180,8 @@ export function ConnectionWizard() {
          * one step that is starved of height. It states its title inline with
          * its rail instead.
          */}
-        {!wide && (
-          <div className="shrink-0 w-full px-5 sm:px-8 pt-6 pb-4 mx-auto max-w-4xl">
+        {!ownsTitle && (
+          <div className={`shrink-0 w-full px-5 sm:px-8 pt-6 pb-4 ${container}`}>
             <h1 className="text-2xl lg:text-[26px] leading-tight font-semibold text-gray-900 dark:text-white">
               {copy.title}
             </h1>
@@ -184,13 +192,19 @@ export function ConnectionWizard() {
         )}
 
         <div
-          className={`flex-1 min-h-0 w-full px-5 sm:px-8 pb-4 flex flex-col ${
-            wide ? 'lg:px-10 pt-4' : 'mx-auto max-w-4xl'
+          className={`flex-1 min-h-0 w-full px-5 sm:px-8 pb-4 flex flex-col ${container} ${
+            ownsTitle ? 'pt-4' : ''
           }`}
         >
           {step === 0 && (
             <div className="flex-1 min-h-0 overflow-y-auto">
-              <StepConnect draft={draft} update={updateDraft} />
+              {/* The form, and beside it what it is for. A credentials card
+                  stretched to 75rem is worse than one at a readable measure —
+                  the width is better spent saying what happens after this. */}
+              <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_19rem] gap-6 xl:gap-10 items-start">
+                <StepConnect draft={draft} update={updateDraft} />
+                <ConnectAside providerName={provider.name} />
+              </div>
             </div>
           )}
           {step === 1 && <StepProject draft={draft} update={updateDraft} />}
@@ -230,6 +244,51 @@ export function ConnectionWizard() {
         </div>
       </footer>
     </div>
+  );
+}
+
+/**
+ * What linking an account actually buys you, next to the form that does it.
+ *
+ * These three promises used to sit under the hero on the integrations page,
+ * where they answered questions nobody had asked yet. Here they are answers:
+ * you are being asked for credentials, and this is what they are for.
+ */
+function ConnectAside({ providerName }: { providerName: string }) {
+  const steps = [
+    { title: 'Pick a project', body: `The one your customer queries live in. One project per connection.` },
+    { title: 'Build your table', body: 'Choose the fields to bring across and name the columns they become.' },
+    { title: 'Import when ready', body: 'Nothing syncs until you say so, and you can watch it land.' },
+  ];
+
+  return (
+    <aside className="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/60 p-5">
+      <h2 className="text-sm font-semibold text-gray-900 dark:text-white">What happens next</h2>
+      <ol className="mt-4 space-y-4">
+        {steps.map((s, i) => (
+          <li key={s.title} className="flex gap-3">
+            <span className="h-5 w-5 shrink-0 rounded-full bg-gray-200 dark:bg-gray-700 text-[11px] font-semibold text-gray-600 dark:text-gray-300 flex items-center justify-center">
+              {i + 1}
+            </span>
+            <span className="min-w-0">
+              <span className="block text-[13px] font-medium text-gray-900 dark:text-white">{s.title}</span>
+              <span className="block text-xs text-gray-500 dark:text-gray-400 mt-0.5 leading-relaxed">
+                {s.body}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ol>
+
+      <div className="mt-5 pt-4 border-t border-gray-200 dark:border-gray-700 flex gap-2.5">
+        <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-px" />
+        <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+          <span className="font-medium text-gray-700 dark:text-gray-300">Read-only, always.</span>{' '}
+          Nothing is ever written back to {providerName}, and removing the integration deletes the
+          credentials immediately.
+        </p>
+      </div>
+    </aside>
   );
 }
 

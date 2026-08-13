@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertCircle, RotateCw, Folder, Search } from 'lucide-react';
+import { AlertCircle, RotateCw, Folder, Search, Check } from 'lucide-react';
 import { MOCK_PROJECTS, type ExternalProject, type WizardDraft } from '../../contexts/IntegrationContext';
 import { fieldCountForType } from './fieldCatalog';
 import {
-  ListBody, ListCount, ListFooter, ListFrame, ListSearch, ListSkeleton, ListState,
-  ListStrip, ListLabel, RadioDot,
+  ListCount, ListFooter, ListFrame, ListSearch, ListState, ListStrip, ListLabel,
 } from './wizardList';
 
 type Status = 'idle' | 'loading' | 'error';
@@ -32,6 +31,19 @@ function fetchProjects(query: string): Promise<ExternalProject[]> {
   });
 }
 
+/**
+ * Picking the project, as a grid across the page.
+ *
+ * This was twenty-eight full-width rows in a 56rem column: a folder tile, a
+ * name, and a field count marooned at the right margin with a hand's width of
+ * nothing between them. Seven fitted on screen, so choosing between twenty-eight
+ * meant scrolling a list whose every row was ninety per cent empty.
+ *
+ * A project is a name, a key and two numbers — a third of a row at most. Three
+ * across puts most of the site in view at once, which turns it from a scroll
+ * into a comparison. Same shape as the email and field pickers that follow, so
+ * the three steps read as one flow.
+ */
 export function StepProject({
   draft,
   update,
@@ -71,56 +83,6 @@ export function StepProject({
 
   useEffect(() => { load(debounced); }, [debounced, load]);
 
-  /**
-   * One line per project. Name, key, type, field count and size sit in fixed
-   * columns so the eye runs straight down each of them, and the whole catalogue
-   * is here — scrolling finds a project faster than clicking "load more" and
-   * hoping.
-   */
-  const Row = ({ p }: { p: ExternalProject }) => {
-    const on = p.id === selectedId;
-    return (
-      <button
-        type="button"
-        role="radio"
-        aria-checked={on}
-        onClick={() => update({ projectIds: [p.id] })}
-        className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
-          on
-            ? 'bg-blue-50 dark:bg-blue-900/25'
-            : 'bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800/60'
-        }`}
-      >
-        <span
-          className={`h-9 w-9 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
-            on ? 'bg-blue-600' : 'bg-gray-100 dark:bg-gray-800'
-          }`}
-        >
-          <Folder className={`h-4 w-4 ${on ? 'text-white' : 'text-gray-500 dark:text-gray-400'}`} />
-        </span>
-
-        <span className="min-w-0 flex-1 flex items-center gap-2">
-          <span className="text-sm font-medium text-gray-900 dark:text-white truncate">{p.name}</span>
-          <span className="shrink-0 rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-1.5 py-px text-xs font-medium text-gray-500 dark:text-gray-400">
-            {p.key}
-          </span>
-        </span>
-
-        {/*
-         * Field count only. Project type and issue volume were columns you
-         * could not act on — neither changes which project is the right one,
-         * and both were pulling the eye across the row for nothing. How many
-         * fields you'll have to work with is the one number that does.
-         */}
-        <span className="hidden sm:block w-16 shrink-0 text-[13px] text-gray-500 dark:text-gray-400 tabular-nums text-right">
-          {fieldCountForType(p.type)}
-        </span>
-
-        <RadioDot on={on} />
-      </button>
-    );
-  };
-
   return (
     <div className="w-full h-full flex flex-col">
       <ListFrame label="Jira projects">
@@ -139,16 +101,24 @@ export function StepProject({
         {status === 'idle' && items.length > 0 && (
           <ListStrip>
             <ListLabel>{debounced ? `Matching “${debounced.trim()}”` : 'All projects on this site'}</ListLabel>
-            <span className="hidden sm:flex items-center gap-3 shrink-0">
-              <ListLabel className="w-16 text-right">Fields</ListLabel>
-              <span className="w-5" aria-hidden />
-            </span>
+            <ListLabel className="shrink-0">Issues · fields available</ListLabel>
           </ListStrip>
         )}
 
-        <ListBody>
+        <div className="flex-1 min-h-0 overflow-y-auto p-3">
           {status === 'loading' ? (
-            <ListSkeleton rows={8} lines={1} />
+            <ul className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+              {Array.from({ length: 9 }).map((_, i) => (
+                <li
+                  key={i}
+                  className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 animate-pulse"
+                >
+                  <span className="block h-3.5 w-32 rounded bg-gray-100 dark:bg-gray-800" />
+                  <span className="block h-3 w-24 rounded bg-gray-100 dark:bg-gray-800 mt-2" />
+                  <span className="block h-3 w-36 rounded bg-gray-100 dark:bg-gray-800 mt-2" />
+                </li>
+              ))}
+            </ul>
           ) : status === 'error' ? (
             <ListState
               icon={AlertCircle}
@@ -168,9 +138,60 @@ export function StepProject({
               }
             />
           ) : (
-            items.map((p) => <Row key={p.id} p={p} />)
+            <ul className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2" role="radiogroup" aria-label="Jira projects">
+              {items.map((p) => {
+                const on = p.id === selectedId;
+                return (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={on}
+                      onClick={() => update({ projectIds: [p.id] })}
+                      className={`w-full h-full flex items-start gap-2.5 rounded-lg border p-3 text-left transition-colors ${
+                        on
+                          ? 'border-emerald-400 dark:border-emerald-600 bg-emerald-50 dark:bg-emerald-900/25'
+                          : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-blue-400 hover:bg-blue-50/50 dark:hover:bg-blue-900/20'
+                      }`}
+                    >
+                      <span
+                        className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
+                          on ? 'bg-emerald-600' : 'bg-gray-100 dark:bg-gray-800'
+                        }`}
+                      >
+                        {on
+                          ? <Check className="h-4 w-4 text-white" />
+                          : <Folder className="h-4 w-4 text-gray-500 dark:text-gray-400" />}
+                      </span>
+
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline gap-1.5 min-w-0">
+                          <span className="text-[13px] font-medium text-gray-900 dark:text-white truncate">
+                            {p.name}
+                          </span>
+                          <span className="shrink-0 rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-1.5 py-px text-[11px] font-medium text-gray-500 dark:text-gray-400">
+                            {p.key}
+                          </span>
+                        </span>
+                        <span className="block text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
+                          {p.type}
+                        </span>
+                        {/*
+                         * Both numbers, because they answer different questions:
+                         * how much is in there, and how much you will have to
+                         * work with on the next step.
+                         */}
+                        <span className="block text-xs text-gray-400 dark:text-gray-500 tabular-nums mt-1">
+                          {p.issues.toLocaleString()} issues · {fieldCountForType(p.type)} fields
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           )}
-        </ListBody>
+        </div>
 
         {/* What you have chosen, held in view however far down you scroll */}
         <ListFooter tone={selected ? 'ok' : 'neutral'}>
