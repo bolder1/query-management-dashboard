@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { useFilters } from '../contexts/FilterContext';
 import {
-  useIntegrations, customFieldOptions, PROVIDERS,
+  useIntegrations, customFieldOptions, PROVIDERS, isSetupComplete, setupTasks,
 } from '../contexts/IntegrationContext';
 import { useNav } from '../contexts/NavContext';
 import { Button } from './ui/button';
@@ -22,7 +22,19 @@ export function IntegrationInsights() {
   const { setPage } = useNav();
   const [open, setOpen] = useState(true);
 
-  const connected = PROVIDERS.filter((p) => connections[p.id]);
+  /**
+   * "Connected" here means finished — an integration whose setup is still
+   * outstanding has nothing on this dashboard, so it must not turn the banner
+   * into a report about data that hasn't arrived.
+   */
+  const connected = PROVIDERS.filter((p) => {
+    const c = connections[p.id];
+    return c && isSetupComplete(c.config);
+  });
+  const unfinished = PROVIDERS.filter((p) => {
+    const c = connections[p.id];
+    return c && !isSetupComplete(c.config);
+  });
 
   const sources = useMemo(() => {
     const counts = new Map<string, number>();
@@ -37,16 +49,22 @@ export function IntegrationInsights() {
   const syncing = connected.some((p) => connections[p.id]?.syncing);
 
   if (connected.length === 0) {
+    /** Setup started but not finished — the useful nudge is what's left. */
+    const resuming = unfinished[0];
+    const left = resuming ? setupTasks(connections[resuming.id]!.config).filter((t) => !t.done).length : 0;
+
     return (
       <div className="mx-6 mt-4 rounded-xl border border-dashed border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <Plug className="h-4 w-4 text-gray-400" />
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Your Jira board isn’t connected yet — link it to pull issues straight into this table.
+            {resuming
+              ? `${resuming.name} is connected but not finished — ${left} step${left === 1 ? '' : 's'} left before anything imports.`
+              : 'Your Jira board isn’t connected yet — link it to pull issues straight into this table.'}
           </p>
         </div>
         <Button size="sm" className="h-8" onClick={() => setPage('Integrations')}>
-          Connect Jira
+          {resuming ? 'Finish setup' : 'Connect Jira'}
         </Button>
       </div>
     );

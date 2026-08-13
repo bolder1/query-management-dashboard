@@ -6,6 +6,7 @@ import {
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
+import { Pill } from '../ui/pill';
 import { toast } from 'sonner';
 import type { WizardDraft } from '../../contexts/IntegrationContext';
 import { AtlassianConsent, AtlassianMark } from './AtlassianConsent';
@@ -103,7 +104,7 @@ export function StepConnect({
               </span>
               Connected
             </p>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-emerald-800">
               <ShieldCheck className="h-3 w-3" />
               Read-only
             </span>
@@ -130,7 +131,7 @@ export function StepConnect({
           {/* Supporting detail — quiet, neutral, clearly subordinate */}
           <dl className="grid grid-cols-2 border-t border-gray-100 dark:border-gray-800 divide-x divide-gray-100 dark:divide-gray-800">
             <div className="px-4 py-3">
-              <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              <dt className="text-xs font-medium text-gray-500 dark:text-gray-400">
                 Signed in with
               </dt>
               <dd className="text-sm text-gray-900 dark:text-white mt-0.5">
@@ -138,7 +139,7 @@ export function StepConnect({
               </dd>
             </div>
             <div className="px-4 py-3">
-              <dt className="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              <dt className="text-xs font-medium text-gray-500 dark:text-gray-400">
                 Scope
               </dt>
               <dd className="text-sm text-gray-900 dark:text-white mt-0.5">Issues &amp; projects</dd>
@@ -179,10 +180,7 @@ export function StepConnect({
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2 flex-wrap">
                 <span className="text-sm font-semibold text-gray-900 dark:text-white">Continue with Atlassian</span>
-                <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 text-[11px] font-medium text-blue-700 dark:text-blue-400">
-                  <Zap className="h-2.5 w-2.5" />
-                  Recommended
-                </span>
+                <Pill tone="accent" size="sm" icon={Zap}>Recommended</Pill>
               </span>
               <span className="block text-sm text-gray-500 dark:text-gray-400 mt-1">
                 Two clicks, no token to generate or rotate. We read your Jira site from your Atlassian account.
@@ -231,9 +229,8 @@ export function StepConnect({
       </button>
 
       {isDemoToken && (
-        <div className="mt-4 flex items-center gap-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-3 py-2">
-          <span className="text-[10px] font-bold tracking-widest text-blue-600 dark:text-blue-400 uppercase">Demo</span>
-          <p className="text-xs text-blue-700 dark:text-blue-300">
+        <div className="mt-4 flex items-start gap-2 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-3 py-2">
+          <p className="text-[13px] text-blue-700 dark:text-blue-300">
             Sample credentials are pre-filled — hit <span className="font-medium">Test connection</span>, or replace
             them with your own.
           </p>

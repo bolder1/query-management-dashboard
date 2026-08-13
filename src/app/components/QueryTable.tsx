@@ -52,7 +52,7 @@ function SourceBadge({ source }: { source?: string }) {
     return <span className="text-xs text-gray-400">Manual</span>;
   }
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/30 text-xs font-medium text-blue-700 dark:text-blue-400">
+    <span style={{borderColor:`var(--pill-accent-line)`,backgroundColor:`var(--pill-accent-bg)`,color:`var(--pill-accent-text)`}} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border  text-xs font-medium ">
       <Plug className="h-3 w-3" />
       {source}
     </span>
@@ -327,7 +327,7 @@ export function QueryTable() {
             <Button variant="outline" size="sm" className="h-8" onClick={() => setShowColChooser(true)}>
               <Columns3 className="h-3.5 w-3.5 mr-1.5" />
               Columns
-              <span className="ml-1.5 text-xs bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 rounded-full px-1.5">
+              <span style={{backgroundColor:`var(--pill-accent-bg)`,color:`var(--pill-accent-text)`}} className="ml-1.5 text-xs  rounded-full px-1.5">
                 {visibleCols.length}
               </span>
             </Button>

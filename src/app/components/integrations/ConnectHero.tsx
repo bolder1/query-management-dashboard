@@ -1,9 +1,10 @@
-import { ShieldCheck, Columns3, Mail } from 'lucide-react';
 import { Button } from '../ui/button';
-import { WIZARD_STEPS } from '../../contexts/IntegrationContext';
+import { PROVIDERS } from '../../contexts/IntegrationContext';
 import svgPaths from '../../../imports/Container/svg-x88cuihjw';
 import imgLine from '../../../imports/Container/c5f24304451b5396e95dff060f5b56a84a67b467.png';
 import imgTargetLogo from '../../../imports/Container/6eda90a011b2332f2db252347b18bc9baf1ce044.png';
+
+const JIRA = PROVIDERS.find((p) => p.id === 'jira')!;
 
 /** Jira brand mark from the imported design. */
 function JiraMark({ className }: { className?: string }) {
@@ -66,15 +67,14 @@ function ArrowIcon() {
   );
 }
 
-const PROMISES = [
-  { icon: Mail, title: 'Emails come with them', body: 'You choose the Jira field the customer’s address is read from.' },
-  { icon: Columns3, title: 'Your columns, your names', body: 'Connect Jira fields to the dashboard columns you already use.' },
-  { icon: ShieldCheck, title: 'Read-only, always', body: 'Nothing is ever written back to Jira. Disconnect any time.' },
-];
-
 /**
  * The first thing an admin sees on Integrations before anything is linked:
- * Jira on one side, the dashboard on the other, and what the setup involves.
+ * Jira on one side, the dashboard on the other, and one button.
+ *
+ * It used to carry a three-up strip of promises underneath — emails, columns,
+ * read-only. They were answers to questions nobody had asked yet, on a page
+ * whose only job is to get the account linked; the flow itself makes the same
+ * points at the moment each one becomes relevant.
  */
 export function ConnectHero({ onConnect }: { onConnect: () => void }) {
   return (
@@ -107,9 +107,10 @@ export function ConnectHero({ onConnect }: { onConnect: () => void }) {
           Connect with your Jira board
         </h2>
 
-        <p className="text-sm leading-relaxed text-gray-500 dark:text-gray-400 text-center max-w-[460px] pt-1.5">
-          Nothing is linked yet. Setup takes {WIZARD_STEPS.length} short steps and you can stop and pick it back up
-          at any point — nothing syncs until you say so.
+        {/* The connector's own description, so this line and the catalogue card
+            can never drift apart. */}
+        <p className="text-sm leading-relaxed text-gray-500 dark:text-gray-400 text-center max-w-[560px] pt-1.5">
+          {JIRA.description}
         </p>
 
         <div className="pt-6">
@@ -122,16 +123,6 @@ export function ConnectHero({ onConnect }: { onConnect: () => void }) {
             <ArrowIcon />
           </Button>
         </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-gray-100 dark:divide-gray-800 border-t border-gray-100 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-800/30">
-        {PROMISES.map((p) => (
-          <div key={p.title} className="px-5 py-4">
-            <p.icon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
-            <p className="text-sm font-medium text-gray-900 dark:text-white mt-2">{p.title}</p>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{p.body}</p>
-          </div>
-        ))}
       </div>
     </div>
   );

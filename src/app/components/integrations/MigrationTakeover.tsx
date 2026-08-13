@@ -1,68 +1,70 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Check, Database, ArrowRight, Table2, Sparkles, ShieldCheck, Loader2,
+  Check, ShieldCheck, Loader2, Minimize2, X, ArrowRight, PartyPopper, AlertTriangle,
 } from 'lucide-react';
 import {
-  PROVIDERS, SYNC_BATCH_SIZE, useIntegrations, type Connection, type Provider,
+  PROVIDERS, SYNC_PHASES, useIntegrations, type SyncPhase,
 } from '../../contexts/IntegrationContext';
 import { sampleValue } from './sampleData';
 
-/** The whole show runs to 30s, then the overview takes over. */
-const TOTAL_MS = 30_000;
+/**
+ * The first import, reported rather than performed.
+ *
+ * What this replaces was a fourteen-second cinematic: a fixed timeline of
+ * captions and flying cards that ran to completion and *then* did the work.
+ * That is fine for a job that takes fourteen seconds and a lie for one that
+ * takes ten minutes — the bar would fill, the confetti would land, and the
+ * import would not have started.
+ *
+ * So the run starts with the screen and the screen reads it. Every number here
+ * is the actual run: the stage it is in, the records it has written, how long
+ * it has taken, and — from those two — a remaining estimate that is a division
+ * rather than a guess.
+ *
+ * The other thing every serious importer does, and this did not: let you
+ * leave. Zoho emails you, Contractbook puts the run in the sidebar, HubSpot
+ * tells you to get on with your day. Nobody is asked to watch a progress bar
+ * for ten minutes. "Run in the background" closes this and the import carries
+ * on; the integration's page keeps reporting it.
+ */
 
-type PhaseId = 'connect' | 'extract' | 'map' | 'write' | 'done';
+/** The stages, minus the terminal one — that is the done state, not a step. */
+const STAGES = SYNC_PHASES.filter((p) => p.id !== 'done');
 
-const PHASES: { id: PhaseId; at: number; label: string; note: string }[] = [
-  { id: 'connect', at: 0, label: 'Secure channel', note: 'Authenticating and opening a read-only session' },
-  { id: 'extract', at: 3_000, label: 'Extract', note: 'Reading issues and their fields out of Jira' },
-  { id: 'map', at: 12_000, label: 'Transform', note: 'Applying your field mapping, row by row' },
-  { id: 'write', at: 20_000, label: 'Load', note: 'Writing records into your Query Results table' },
-  { id: 'done', at: 27_000, label: 'Ready', note: 'Everything is in — opening your dashboard' },
-];
+/** Rows visible in the "filling up" table. */
+const PREVIEW_ROWS = 6;
 
-const easeOut = (t: number) => 1 - Math.pow(1 - Math.min(1, Math.max(0, t)), 3);
+function clock(ms: number) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
+}
 
-/** Progress of a single phase, 0-1. */
-function phaseProgress(elapsed: number, i: number) {
-  const start = PHASES[i].at;
-  const end = i + 1 < PHASES.length ? PHASES[i + 1].at : TOTAL_MS;
-  return Math.min(1, Math.max(0, (elapsed - start) / (end - start)));
+/** Rounded up and hedged — a precise estimate from a moving average is a lie. */
+function remaining(ms: number) {
+  const s = Math.round(ms / 1000);
+  if (s <= 5) return 'almost done';
+  if (s < 60) return `about ${Math.ceil(s / 5) * 5} seconds left`;
+  const m = Math.ceil(s / 60);
+  return `about ${m} minute${m === 1 ? '' : 's'} left`;
 }
 
 export function MigrationTakeover() {
-  const { migrating, connections, finishMigration } = useIntegrations();
+  const { migrating, connections, finishMigration, cancelSync } = useIntegrations();
   const conn = migrating ? connections[migrating] : undefined;
   const provider = PROVIDERS.find((p) => p.id === migrating);
 
-  const [elapsed, setElapsed] = useState(0);
-  const doneRef = useRef(false);
-  const finishRef = useRef(finishMigration);
-  finishRef.current = finishMigration;
+  const [now, setNow] = useState(() => Date.now());
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const scroller = useRef<HTMLDivElement>(null);
 
-  /**
-   * One clock drives every counter and reveal. It reads elapsed time from the
-   * wall clock rather than accumulating frames, and a hard timeout guarantees
-   * the finish — a background tab throttles timers, and rAF stops entirely, so
-   * neither may be relied on to land the last tick.
-   */
   useEffect(() => {
     if (!migrating) return;
-    const start = Date.now();
-    const done = () => {
-      if (doneRef.current) return;
-      doneRef.current = true;
-      finishRef.current();
-    };
-    const timer = window.setInterval(() => {
-      const e = Date.now() - start;
-      setElapsed(e);
-      if (e >= TOTAL_MS) { window.clearInterval(timer); done(); }
-    }, 40);
-    const guard = window.setTimeout(done, TOTAL_MS + 200);
-    return () => { window.clearInterval(timer); window.clearTimeout(guard); };
+    const t = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(t);
   }, [migrating]);
 
-  // Nothing behind the takeover should scroll while it owns the screen.
   useEffect(() => {
     if (!migrating) return;
     const prev = document.body.style.overflow;
@@ -70,533 +72,313 @@ export function MigrationTakeover() {
     return () => { document.body.style.overflow = prev; };
   }, [migrating]);
 
+  const processed = conn?.processed ?? 0;
+
+  /** Keep the newest row in view as the table fills. */
+  useEffect(() => {
+    const box = scroller.current;
+    if (box) box.scrollTop = box.scrollHeight;
+  }, [processed]);
+
   if (!migrating || !conn || !provider) return null;
 
-  const phaseIndex = PHASES.reduce((acc, p, i) => (elapsed >= p.at ? i : acc), 0);
-  const phase = PHASES[phaseIndex];
-  const overall = Math.min(100, (elapsed / TOTAL_MS) * 100);
+  const done = !conn.syncing && conn.progress >= 100;
+  const stopped = !conn.syncing && conn.progress < 100;
+  const stageIndex = STAGES.findIndex((s) => s.id === conn.phase);
+  const current = stageIndex < 0 ? STAGES.length - 1 : stageIndex;
+
+  /*
+   * Elapsed comes off the run, not off this component. This is mounted for the
+   * whole session and only renders when a migration is on, so timing it from
+   * first render clocked the age of the browser tab — and the estimate divided
+   * by it, which is how a twenty-second import came to claim two minutes.
+   */
+  const run = conn.runs.find((r) => r.status === 'running') ?? conn.runs[0];
+  const startedAt = run ? new Date(run.startedAt).getTime() : now;
+  const elapsed = !conn.syncing && run?.durationMs ? run.durationMs : now - startedAt;
+  const eta = conn.progress > 4 && conn.syncing
+    ? (elapsed / conn.progress) * (100 - conn.progress)
+    : null;
+
+  const project = conn.config.projects[0];
+  const columns = conn.config.mappings.filter((m) => m.visible && m.source.trim()).slice(0, 4);
+  const landed = Math.min(processed, PREVIEW_ROWS);
 
   return (
-    <div className="fixed inset-0 z-[80] overflow-hidden bg-[#080b16] text-white">
-      <Keyframes />
-
-      {/* Depth: a slow drifting grid and two soft light sources */}
-      <div className="qm-grid absolute inset-0 opacity-[0.18]" aria-hidden="true" />
+    <div className="fixed inset-0 z-[80] flex flex-col bg-[#080b12] text-white">
+      {/* One idea only: a flow axis, left to right, with a light travelling it. */}
       <div
-        className="absolute -top-40 left-1/4 h-[34rem] w-[34rem] rounded-full blur-[130px] opacity-40"
-        style={{ background: 'radial-gradient(circle, #2563eb 0%, transparent 70%)' }}
-        aria-hidden="true"
-      />
-      <div
-        className="absolute -bottom-52 right-1/5 h-[34rem] w-[34rem] rounded-full blur-[130px] opacity-30"
-        style={{ background: 'radial-gradient(circle, #10b981 0%, transparent 70%)' }}
-        aria-hidden="true"
+        className="absolute inset-0 pointer-events-none"
+        aria-hidden
+        style={{ background: 'radial-gradient(120% 90% at 50% 0%, #101828 0%, #080b12 60%)' }}
       />
 
-      <div className="relative h-full flex flex-col">
-        <Header provider={provider} conn={conn} elapsed={elapsed} onSkip={() => {
-          if (!doneRef.current) { doneRef.current = true; finishMigration(); }
-        }} />
-
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className="mx-auto w-full max-w-5xl px-6 py-6 lg:py-10">
-            <Rail conn={conn} provider={provider} elapsed={elapsed} phaseIndex={phaseIndex} />
-
-            <div className="mt-8 lg:mt-10" role="status" aria-live="polite">
-              <p className="text-xs font-semibold tracking-[0.2em] text-blue-300/80 uppercase">
-                Step {phaseIndex + 1} of {PHASES.length} · {phase.label}
-              </p>
-              <h1 className="text-2xl lg:text-[32px] leading-tight font-semibold mt-2">
-                {phase.id === 'connect' && 'Opening a secure channel to Jira'}
-                {phase.id === 'extract' && 'Extracting your Jira issues'}
-                {phase.id === 'map' && 'Mapping Jira fields onto your columns'}
-                {phase.id === 'write' && 'Writing records into Query Results'}
-                {phase.id === 'done' && 'Your Jira data has landed'}
-              </h1>
-              <p className="text-sm text-white/60 mt-2">{phase.note}</p>
-            </div>
-
-            <div className="mt-6">
-              {phase.id === 'connect' && <ConnectStage conn={conn} p={phaseProgress(elapsed, 0)} />}
-              {phase.id === 'extract' && <ExtractStage conn={conn} p={phaseProgress(elapsed, 1)} />}
-              {phase.id === 'map' && <MapStage conn={conn} p={phaseProgress(elapsed, 2)} />}
-              {phase.id === 'write' && <WriteStage conn={conn} p={phaseProgress(elapsed, 3)} />}
-              {phase.id === 'done' && <DoneStage conn={conn} p={phaseProgress(elapsed, 4)} />}
-            </div>
-          </div>
-        </div>
-
-        <Footer elapsed={elapsed} overall={overall} phaseIndex={phaseIndex} />
-      </div>
-    </div>
-  );
-}
-
-/* --------------------------------- Chrome --------------------------------- */
-
-function Header({
-  provider, conn, elapsed, onSkip,
-}: {
-  provider: Provider;
-  conn: Connection;
-  elapsed: number;
-  onSkip: () => void;
-}) {
-  const project = conn.config.projects[0];
-  return (
-    <div className="shrink-0 border-b border-white/10">
-      <div className="mx-auto w-full max-w-5xl px-6 py-4 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <span
-            className="h-9 w-9 rounded-lg flex items-center justify-center text-[13px] font-bold shrink-0"
-            style={{ backgroundColor: provider.color }}
-          >
-            {provider.initials}
-          </span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold truncate">
-              Migrating {project ? `${project.name} (${project.key})` : provider.name}
-            </p>
-            <p className="text-xs text-white/50 truncate">
-              {conn.config.siteUrl.replace('https://', '')} → Query Management
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-white/15 px-2.5 py-1 text-[11px] font-medium text-emerald-300">
-            <ShieldCheck className="h-3 w-3" />
-            Read-only
-          </span>
-          <span className="text-xs tabular-nums text-white/40">
-            {Math.min(30, Math.ceil(elapsed / 1000))}s / 30s
-          </span>
-          <button
-            onClick={onSkip}
-            className="rounded-md border border-white/15 px-2.5 py-1 text-xs font-medium text-white/70 hover:bg-white/10 hover:text-white transition-colors"
-          >
-            Skip
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Footer({ elapsed, overall, phaseIndex }: { elapsed: number; overall: number; phaseIndex: number }) {
-  return (
-    <div className="shrink-0 border-t border-white/10 bg-black/20">
-      <div className="mx-auto w-full max-w-5xl px-6 py-4">
-        <div className="h-1 rounded-full bg-white/10 overflow-hidden">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-blue-400 to-emerald-400"
-            style={{ width: `${overall}%` }}
-          />
-        </div>
-        <ol className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2">
-          {PHASES.map((p, i) => {
-            const done = i < phaseIndex || elapsed >= TOTAL_MS;
-            const current = i === phaseIndex && elapsed < TOTAL_MS;
-            return (
-              <li key={p.id} className="flex items-center gap-1.5">
-                <span
-                  className={`h-4 w-4 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0 ${
-                    done
-                      ? 'bg-emerald-400 text-[#080b16]'
-                      : current
-                        ? 'bg-white text-[#080b16]'
-                        : 'border border-white/25 text-white/40'
-                  }`}
-                >
-                  {done ? <Check className="h-2.5 w-2.5" /> : i + 1}
-                </span>
-                <span
-                  className={`text-xs ${
-                    current ? 'text-white font-medium' : done ? 'text-white/60' : 'text-white/35'
-                  }`}
-                >
-                  {p.label}
-                </span>
-              </li>
-            );
-          })}
-        </ol>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------- The rail --------------------------------- */
-
-function Rail({
-  conn, provider, elapsed, phaseIndex,
-}: {
-  conn: Connection;
-  provider: Provider;
-  elapsed: number;
-  phaseIndex: number;
-}) {
-  const project = conn.config.projects[0];
-  const mapped = conn.config.mappings.filter((m) => m.source.trim() && m.target.trim());
-  const issues = project?.issues ?? 1284;
-  const scanned = Math.round(easeOut(phaseProgress(elapsed, 1)) * issues);
-  const written = Math.round(easeOut(phaseProgress(elapsed, 3)) * SYNC_BATCH_SIZE);
-
-  const nodes = [
-    {
-      key: 'source',
-      icon: Database,
-      title: provider.name,
-      sub: project ? project.key : 'Source',
-      stat: phaseIndex >= 1 ? `${scanned.toLocaleString()} issues read` : 'Connecting…',
-      lit: phaseIndex >= 1,
-    },
-    {
-      key: 'engine',
-      icon: Sparkles,
-      title: 'Mapping engine',
-      sub: `${mapped.length} field${mapped.length === 1 ? '' : 's'}`,
-      stat: phaseIndex >= 2 ? 'Transforming' : 'Waiting',
-      lit: phaseIndex >= 2,
-    },
-    {
-      key: 'target',
-      icon: Table2,
-      title: 'Query Results',
-      sub: 'Your dashboard',
-      stat: phaseIndex >= 3 ? `${written} records written` : 'Standing by',
-      lit: phaseIndex >= 3,
-    },
-  ];
-
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr_auto_1fr] items-center gap-3">
-      {nodes.map((n, i) => (
-        <div key={n.key} className="contents">
-          <div
-            className={`rounded-2xl border p-4 transition-colors duration-500 ${
-              n.lit
-                ? 'border-white/25 bg-white/[0.08] shadow-[0_0_40px_-12px_rgba(59,130,246,0.55)]'
-                : 'border-white/10 bg-white/[0.03]'
-            }`}
-          >
-            <div className="flex items-center gap-2.5">
-              <span
-                className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 transition-colors ${
-                  n.lit ? 'bg-blue-500/90' : 'bg-white/10'
-                }`}
-              >
-                <n.icon className="h-4 w-4" />
-              </span>
-              <div className="min-w-0">
-                <p className="text-sm font-semibold truncate">{n.title}</p>
-                <p className="text-[11px] text-white/45 truncate">{n.sub}</p>
-              </div>
-            </div>
-            <p className={`text-xs mt-3 tabular-nums ${n.lit ? 'text-blue-200' : 'text-white/35'}`}>
-              {n.stat}
-            </p>
-          </div>
-
-          {i < nodes.length - 1 && (
-            <Connector active={phaseIndex >= i + 1 && phaseIndex < 4} />
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** The travelling packets between two nodes. */
-function Connector({ active }: { active: boolean }) {
-  return (
-    <div className="relative h-8 sm:h-10 sm:w-16 flex items-center justify-center" aria-hidden="true">
-      <span className="absolute left-0 right-0 top-1/2 h-px bg-white/15 hidden sm:block" />
-      <span className="absolute top-0 bottom-0 left-1/2 w-px bg-white/15 sm:hidden" />
-      {active &&
-        [0, 1, 2].map((i) => (
-          <span
-            key={i}
-            className="qm-packet absolute h-1.5 w-1.5 rounded-full bg-blue-300 shadow-[0_0_10px_2px_rgba(147,197,253,0.7)]"
-            style={{ animationDelay: `${i * 0.45}s` }}
-          />
-        ))}
-      <ArrowRight className={`relative h-3.5 w-3.5 ${active ? 'text-blue-300' : 'text-white/25'}`} />
-    </div>
-  );
-}
-
-/* -------------------------------- Stages ---------------------------------- */
-
-function Card({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.04] backdrop-blur-sm p-4 lg:p-5">
-      {children}
-    </div>
-  );
-}
-
-function ConnectStage({ conn, p }: { conn: Connection; p: number }) {
-  const steps = [
-    `Resolving ${conn.config.siteUrl.replace('https://', '')}`,
-    `Authenticating as ${conn.config.account}`,
-    'Verifying read-only scopes',
-  ];
-  return (
-    <Card>
-      <ul className="space-y-3">
-        {steps.map((s, i) => {
-          const done = p > (i + 1) / steps.length;
-          const active = !done && p > i / steps.length;
-          return (
-            <li key={s} className="flex items-center gap-3">
-              <span
-                className={`h-5 w-5 rounded-full flex items-center justify-center shrink-0 ${
-                  done ? 'bg-emerald-400 text-[#080b16]' : 'border border-white/25'
-                }`}
-              >
-                {done ? <Check className="h-3 w-3" /> : active ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-              </span>
-              <span className={`text-sm ${done || active ? 'text-white/90' : 'text-white/35'}`}>{s}</span>
-            </li>
-          );
-        })}
-      </ul>
-    </Card>
-  );
-}
-
-function ExtractStage({ conn, p }: { conn: Connection; p: number }) {
-  const project = conn.config.projects[0];
-  const issues = project?.issues ?? 1284;
-  const scanned = Math.round(easeOut(p) * issues);
-  const key = project?.key ?? 'ITS';
-
-  // A rolling window of issue keys, so the stream reads as continuous work.
-  const stream = useMemo(() => Array.from({ length: 7 }, (_, i) => i), []);
-  const head = Math.floor(p * 42);
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-[18rem_1fr] gap-4">
-      <Card>
-        <p className="text-xs text-white/45">Issues read from {key}</p>
-        <p className="text-[40px] leading-none font-semibold tabular-nums mt-2">
-          {scanned.toLocaleString()}
-        </p>
-        <p className="text-xs text-white/40 mt-1">of {issues.toLocaleString()}</p>
-        <div className="h-1 rounded-full bg-white/10 mt-4 overflow-hidden">
-          <div className="h-full rounded-full bg-blue-400" style={{ width: `${easeOut(p) * 100}%` }} />
-        </div>
-        <p className="text-[11px] text-white/40 mt-3">
-          Nothing is written back — Jira is only ever read.
-        </p>
-      </Card>
-
-      <Card>
-        <div className="space-y-1.5">
-          {stream.map((i) => {
-            const n = head + i;
-            const summary = sampleValue('Summary', n);
-            return (
-              <div
-                key={`${n}-${i}`}
-                className="qm-rise flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2"
-                style={{ animationDelay: `${i * 0.06}s` }}
-              >
-                <span className="text-[11px] font-mono text-blue-300 shrink-0 w-16 truncate">
-                  {key}-{1024 + n}
-                </span>
-                <span className="text-xs text-white/80 truncate flex-1">{summary}</span>
-                <Check className="h-3 w-3 text-emerald-400 shrink-0" />
-              </div>
-            );
-          })}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-function MapStage({ conn, p }: { conn: Connection; p: number }) {
-  const mapped = conn.config.mappings.filter((m) => m.source.trim() && m.target.trim());
-  const shown = mapped.slice(0, 9);
-  return (
-    <Card>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
-        {shown.map((m, i) => {
-          const lit = p > i / Math.max(shown.length, 1);
-          return (
-            <div
-              key={m.id}
-              className={`flex items-center gap-2 rounded-lg px-2.5 py-2 transition-all duration-500 ${
-                lit ? 'bg-white/[0.06]' : 'opacity-30'
-              }`}
+      <div className="relative flex-1 min-h-0 flex flex-col">
+        {/* --------------------------------- Header ------------------------------- */}
+        <header className="shrink-0 flex items-center justify-between gap-4 px-6 py-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <span
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0"
+              style={{ backgroundColor: provider.color }}
             >
-              <span className="text-xs text-white/70 truncate flex-1 text-right">{m.source}</span>
-              <span className="relative h-px w-8 bg-white/20 shrink-0">
-                <span
-                  className={`absolute inset-y-0 left-0 bg-blue-400 transition-[width] duration-500 ${
-                    lit ? 'w-full' : 'w-0'
-                  }`}
-                />
-              </span>
-              <ArrowRight className={`h-3 w-3 shrink-0 ${lit ? 'text-blue-300' : 'text-white/20'}`} />
-              <span className={`text-xs truncate flex-1 ${lit ? 'text-white font-medium' : 'text-white/40'}`}>
-                {m.target}
-              </span>
+              {provider.initials}
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-medium truncate">
+                Importing from {provider.name}
+              </p>
+              <p className="text-xs text-white/45 truncate">
+                {project ? `${project.name} (${project.key})` : 'Your project'} · read-only
+              </p>
             </div>
-          );
-        })}
-      </div>
-      <p className="text-[11px] text-white/40 mt-4">
-        Emails are read from{' '}
-        <span className="text-white/70">{conn.config.emailMapping.sourceField || 'your chosen field'}</span> and
-        land in the Email column.
-      </p>
-    </Card>
-  );
-}
+          </div>
+          <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-300/80 shrink-0">
+            <ShieldCheck className="h-3 w-3" />
+            Nothing is written back to {provider.name}
+          </span>
+        </header>
 
-function WriteStage({ conn, p }: { conn: Connection; p: number }) {
-  const columns = conn.config.mappings
-    .filter((m) => m.visible && m.target.trim())
-    .slice(0, 5);
-  const written = Math.round(easeOut(p) * SYNC_BATCH_SIZE);
-  const rows = 6;
+        {/* --------------------------------- Body --------------------------------- */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6">
+          <div className="mx-auto w-full max-w-3xl">
+            {/* Headline: what is happening, and how far in */}
+            <div className="pt-6 sm:pt-10">
+              <p className="text-[11px] font-semibold tracking-[0.22em] uppercase text-blue-300/70">
+                {done ? 'Finished' : stopped ? 'Stopped' : `Step ${current + 1} of ${STAGES.length}`}
+              </p>
+              <h1 className="text-2xl lg:text-[30px] leading-tight font-semibold mt-2 flex items-center gap-3">
+                {done
+                  ? 'Your dashboard is ready'
+                  : stopped
+                    ? 'Import stopped'
+                    : STAGES[current].label}
+                {conn.syncing && <Loader2 className="h-5 w-5 animate-spin text-blue-300 shrink-0" />}
+              </h1>
+              <p className="text-sm text-white/50 mt-2">
+                {done
+                  ? `${conn.totalImported.toLocaleString()} records are on your dashboard.`
+                  : stopped
+                    ? `${processed.toLocaleString()} records were written before it stopped. They are safe — you can run the sync again whenever you like.`
+                    : 'You can leave this running and carry on — we will keep importing in the background.'}
+              </p>
+            </div>
 
-  return (
-    <div className="space-y-3">
-      <Card>
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <p className="text-sm text-white/70">
-            <span className="text-xl font-semibold tabular-nums text-white">{written}</span> records written
-          </p>
-          <p className="text-[11px] text-white/40">
-            First sync takes the most recent batch — later syncs pick up where this one stops.
-          </p>
-        </div>
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full min-w-[34rem]">
-            <thead>
-              <tr className="border-b border-white/10">
-                {columns.map((m) => (
-                  <th
-                    key={m.id}
-                    className="text-left px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/40 whitespace-nowrap"
-                  >
-                    {m.target}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {Array.from({ length: rows }).map((_, r) => {
-                const visible = p > r / rows;
+            {/* Progress */}
+            <div className="mt-6">
+              <div className="flex items-baseline justify-between gap-3 text-sm">
+                <span className="tabular-nums font-semibold">{Math.round(conn.progress)}%</span>
+                <span className="text-white/45 tabular-nums">
+                  {conn.syncing ? (eta ? remaining(eta) : 'estimating…') : clock(elapsed)}
+                </span>
+              </div>
+              <div className="mt-2 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-[width] duration-300 ease-out ${
+                    stopped ? 'bg-amber-400' : 'bg-gradient-to-r from-blue-400 to-emerald-400'
+                  }`}
+                  style={{ width: `${Math.max(2, conn.progress)}%` }}
+                />
+              </div>
+            </div>
+
+            {/* The numbers — the thing you actually want during a long wait */}
+            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-px mt-6 rounded-xl overflow-hidden bg-white/10">
+              <Stat label="In scope" value={project ? project.issues.toLocaleString() : '—'} />
+              <Stat
+                label="Imported"
+                value={conn.target ? `${processed.toLocaleString()} / ${conn.target.toLocaleString()}` : processed.toLocaleString()}
+                live={conn.syncing}
+              />
+              <Stat label="Columns" value={String(conn.config.mappings.filter((m) => m.source.trim()).length)} />
+              <Stat label="Elapsed" value={clock(elapsed)} />
+            </dl>
+
+            {/* Stages */}
+            <ol className="mt-6 rounded-xl border border-white/10 divide-y divide-white/5 overflow-hidden">
+              {STAGES.map((stage, i) => {
+                const state = done || i < current ? 'done' : i === current && conn.syncing ? 'running' : 'waiting';
                 return (
-                  <tr
-                    key={r}
-                    className={`border-b border-white/5 transition-opacity duration-300 ${
-                      visible ? 'qm-rise opacity-100' : 'opacity-0'
-                    }`}
-                  >
-                    {columns.map((m) => (
-                      <td
-                        key={m.id}
-                        className="px-2.5 py-2 text-xs text-white/75 whitespace-nowrap max-w-[13rem] truncate"
-                      >
-                        {sampleValue(m.source, r)}
-                      </td>
-                    ))}
-                  </tr>
+                  <li key={stage.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <span className="shrink-0">
+                      {state === 'done' ? (
+                        <span className="h-5 w-5 rounded-full bg-emerald-500 flex items-center justify-center">
+                          <Check className="h-3 w-3 text-white" />
+                        </span>
+                      ) : state === 'running' ? (
+                        <Loader2 className="h-5 w-5 text-blue-300 animate-spin" />
+                      ) : (
+                        <span className="h-5 w-5 rounded-full border border-white/20" />
+                      )}
+                    </span>
+                    <span
+                      className={`text-sm flex-1 min-w-0 truncate ${
+                        state === 'waiting' ? 'text-white/35' : 'text-white/90'
+                      }`}
+                    >
+                      {stage.label}
+                    </span>
+                    <span className="text-xs text-white/40 tabular-nums shrink-0 hidden sm:block">
+                      {stageNote(stage.id, conn.config.account, project?.issues, conn.config.mappings.length, processed)}
+                    </span>
+                  </li>
                 );
               })}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-    </div>
-  );
-}
+            </ol>
 
-function DoneStage({ conn, p }: { conn: Connection; p: number }) {
-  const mapped = conn.config.mappings.filter((m) => m.source.trim() && m.target.trim());
-  const filters = mapped.filter((m) => m.filterable);
-  const tiles = [
-    { label: 'Records imported', value: String(SYNC_BATCH_SIZE) },
-    { label: 'Columns mapped', value: String(mapped.length) },
-    { label: 'Filters added', value: String(filters.length) },
-    { label: 'Written back to Jira', value: 'Nothing' },
-  ];
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {tiles.map((t, i) => (
-          <div
-            key={t.label}
-            className="qm-rise rounded-2xl border border-white/12 bg-white/[0.06] p-4"
-            style={{ animationDelay: `${i * 0.08}s` }}
-          >
-            <p className="text-[11px] text-white/45">{t.label}</p>
-            <p className="text-2xl font-semibold mt-1 tabular-nums">{t.value}</p>
+            {/* The table filling up — the same one they built, now with real rows */}
+            {columns.length > 0 && (
+              <div className="mt-6 rounded-xl border border-white/10 overflow-hidden">
+                <p className="px-4 py-2 text-xs text-white/45 border-b border-white/10">
+                  {done ? 'What landed' : 'Landing in Query Results…'}
+                </p>
+                <div ref={scroller} className="max-h-52 overflow-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr>
+                        {columns.map((m) => (
+                          <th
+                            key={m.id}
+                            className="sticky top-0 z-10 bg-[#0d1220] text-left px-3 py-2 text-[11px] font-semibold text-white/55 whitespace-nowrap border-b border-white/10"
+                          >
+                            {m.label || m.target}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Array.from({ length: landed }).map((_, i) => (
+                        <tr key={i} className="qm-row-in border-b border-white/5 last:border-0">
+                          {columns.map((m) => (
+                            <td
+                              key={m.id}
+                              className="px-3 py-2 text-[13px] text-white/75 whitespace-nowrap max-w-[14rem] truncate"
+                            >
+                              {sampleValue(m.source, i)}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                      {landed === 0 && (
+                        <tr>
+                          <td colSpan={columns.length} className="px-3 py-6 text-center text-[13px] text-white/30">
+                            Waiting for the first records…
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
-        ))}
-      </div>
+        </div>
 
-      <div className="flex items-center gap-3 rounded-2xl border border-emerald-400/25 bg-emerald-400/10 px-4 py-3">
-        <span className="h-8 w-8 rounded-full bg-emerald-400 text-[#080b16] flex items-center justify-center shrink-0">
-          <Check className="h-4 w-4" />
-        </span>
-        <p className="text-sm text-emerald-100 flex-1 min-w-0">
-          Migration complete. Opening your {conn.config.projects[0]?.name ?? 'integration'} overview…
-        </p>
-        <span className="relative h-7 w-7 shrink-0">
-          <svg viewBox="0 0 36 36" className="h-7 w-7 -rotate-90">
-            <circle cx="18" cy="18" r="15" fill="none" strokeWidth="3" className="stroke-white/15" />
-            <circle
-              cx="18" cy="18" r="15" fill="none" strokeWidth="3" strokeLinecap="round"
-              className="stroke-emerald-300"
-              strokeDasharray={94.2}
-              strokeDashoffset={94.2 * (1 - p)}
-            />
-          </svg>
-        </span>
+        {/* --------------------------------- Footer -------------------------------- */}
+        <footer className="shrink-0 border-t border-white/10 bg-black/20">
+          <div className="mx-auto w-full max-w-3xl flex flex-wrap items-center justify-between gap-3 px-6 py-3.5">
+            {done ? (
+              <>
+                <p className="flex items-center gap-2 text-sm text-emerald-300 min-w-0">
+                  <PartyPopper className="h-4 w-4 shrink-0" />
+                  Imported in {clock(elapsed)}
+                </p>
+                <button
+                  onClick={finishMigration}
+                  className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-gray-900 hover:bg-white/90 transition-colors"
+                >
+                  See your dashboard
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+              </>
+            ) : stopped ? (
+              <>
+                <p className="flex items-center gap-2 text-sm text-amber-300 min-w-0">
+                  <AlertTriangle className="h-4 w-4 shrink-0" />
+                  Stopped at {Math.round(conn.progress)}%
+                </p>
+                <button
+                  onClick={finishMigration}
+                  className="shrink-0 rounded-lg bg-white px-3.5 py-2 text-sm font-semibold text-gray-900 hover:bg-white/90 transition-colors"
+                >
+                  Back to the integration
+                </button>
+              </>
+            ) : confirmCancel ? (
+              <>
+                <p className="text-sm text-white/70 min-w-0">
+                  Stop the import? The {processed.toLocaleString()} records already written will stay.
+                </p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setConfirmCancel(false)}
+                    className="rounded-lg border border-white/15 px-3 py-2 text-sm font-medium text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+                  >
+                    Keep going
+                  </button>
+                  <button
+                    onClick={() => { cancelSync(migrating); setConfirmCancel(false); }}
+                    className="rounded-lg bg-red-500 px-3 py-2 text-sm font-semibold text-white hover:bg-red-600 transition-colors"
+                  >
+                    Stop import
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-white/45 min-w-0 truncate">
+                  This keeps running if you close it.
+                </p>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setConfirmCancel(true)}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-white/50 hover:bg-white/10 hover:text-white transition-colors"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                    Stop
+                  </button>
+                  <button
+                    onClick={finishMigration}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/20 px-3.5 py-2 text-sm font-semibold text-white hover:bg-white/10 transition-colors"
+                  >
+                    <Minimize2 className="h-3.5 w-3.5" />
+                    Run in the background
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </footer>
       </div>
     </div>
   );
 }
 
-/** Keyframes kept with the component so the takeover is self-contained. */
-function Keyframes() {
+function Stat({ label, value, live }: { label: string; value: string; live?: boolean }) {
   return (
-    <style>{`
-      @keyframes qm-packet {
-        0%   { transform: translateX(-28px); opacity: 0; }
-        15%  { opacity: 1; }
-        85%  { opacity: 1; }
-        100% { transform: translateX(28px); opacity: 0; }
-      }
-      @keyframes qm-rise {
-        from { opacity: 0; transform: translateY(6px); }
-        to   { opacity: 1; transform: translateY(0); }
-      }
-      @keyframes qm-pan {
-        from { background-position: 0 0; }
-        to   { background-position: 44px 44px; }
-      }
-      .qm-packet { animation: qm-packet 1.35s linear infinite; }
-      .qm-rise   { animation: qm-rise .45s ease-out both; }
-      .qm-grid {
-        background-image:
-          linear-gradient(to right, rgba(255,255,255,.16) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(255,255,255,.16) 1px, transparent 1px);
-        background-size: 44px 44px;
-        animation: qm-pan 6s linear infinite;
-        mask-image: radial-gradient(ellipse at 50% 40%, #000 20%, transparent 72%);
-      }
-      @media (prefers-reduced-motion: reduce) {
-        .qm-packet, .qm-rise, .qm-grid { animation: none; }
-        .qm-rise { opacity: 1; transform: none; }
-      }
-    `}</style>
+    <div className="bg-[#0b101c] px-4 py-3">
+      <dt className="text-[11px] uppercase tracking-wide text-white/40 flex items-center gap-1.5">
+        {label}
+        {live && <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+      </dt>
+      <dd className="text-lg font-semibold tabular-nums mt-0.5">{value}</dd>
+    </div>
   );
+}
+
+/** The detail under each stage — what it actually did, not a generic caption. */
+function stageNote(
+  id: SyncPhase,
+  account: string,
+  inScope: number | undefined,
+  columns: number,
+  processed: number,
+) {
+  switch (id) {
+    case 'connecting': return 'Secure channel';
+    case 'authenticating': return account;
+    case 'fetching': return inScope ? `${inScope.toLocaleString()} issues` : '';
+    case 'mapping': return `${columns} column${columns === 1 ? '' : 's'}`;
+    case 'importing': return processed ? `${processed.toLocaleString()} written` : '';
+    default: return '';
+  }
 }

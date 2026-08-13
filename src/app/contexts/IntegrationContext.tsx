@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useMemo, useRef, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, ReactNode } from 'react';
 
 /* ---------------------------------- Types --------------------------------- */
 
@@ -80,6 +80,13 @@ export interface IntegrationConfig {
 export interface Connection {
   config: IntegrationConfig;
   connectedAt: string;
+  /**
+   * When the configuration was last actually changed. Setup is not a one-time
+   * event — answers get edited long after the first import — so the page needs
+   * to know whether what is on the dashboard was built from the current answers
+   * or from an older set.
+   */
+  configUpdatedAt: string;
   runs: SyncRun[];
   totalImported: number;
   syncing: boolean;
@@ -387,7 +394,25 @@ export function customFieldOptions(label: string) {
 
 export interface WizardDraft {
   providerId: ProviderId;
-  step: number;                 // 0-based
+  /** Absolute index into WIZARD_STEPS — not a position within `sequence`. */
+  step: number;
+  /**
+   * Which steps this run of the wizard covers.
+   *
+   * Setup is no longer one six-step sitting. Connecting an integration runs
+   * ENTRY_SEQUENCE only; everything after that is opened one step at a time
+   * from the integration's own page, where the answers are already saved. The
+   * shell reads this to know what to put in the rail and when it is finished.
+   */
+  sequence: number[];
+  /**
+   * Which shell hosts this draft. `connect` is the compact dialog that links an
+   * account and confirms a project; `task` is a single saved answer being
+   * changed from the integration's page. They are different enough shapes —
+   * one is a short guided flow, the other is an editor — that sharing a shell
+   * made both worse.
+   */
+  mode: 'connect' | 'task';
   authMethod: AuthMethod;
   siteUrl: string;
   email: string;
@@ -402,19 +427,166 @@ export interface WizardDraft {
    * ever seeds once, so clearing the table doesn't refill behind the user.
    */
   fieldsSeeded: boolean;
+  /**
+   * Open the fields step showing the table it produces rather than the list
+   * that builds it. Review is a view of that step, not a step of its own, so
+   * "preview the result" is just this flag.
+   */
+  reviewing?: boolean;
   /** Wall-clock of the last edit, shown on the resume card. */
   updatedAt: string;
 }
 
-/** Ordered wizard steps — the single source of truth for step indices. */
+/**
+ * Ordered wizard steps — the single source of truth for step indices.
+ *
+ * There used to be six. Four of them — email, fields, mapping, review — were
+ * one decision cut into pieces: you chose a field on one screen, learned where
+ * it went on another, and confirmed it on a third. They are now a single step
+ * where each row carries its own destination, with the review as a view of that
+ * same step rather than a screen after it.
+ */
 export const WIZARD_STEPS = [
   { title: 'Connect', hint: 'Sign in to Jira' },
   { title: 'Project', hint: 'Pick what to sync' },
-  { title: 'Email', hint: 'Where it comes from' },
-  { title: 'Fields', hint: 'Choose what to bring' },
-  { title: 'Mapping', hint: 'Match to columns' },
-  { title: 'Review', hint: 'Confirm and sync' },
+  { title: 'Fields', hint: 'Choose and connect' },
 ] as const;
+
+/**
+ * What "Connect" actually opens: sign in, then confirm we can see your
+ * projects. Two steps, both cheap, and the second is skippable.
+ *
+ * Everything past this needs the project's schema anyway, so there is nothing
+ * to gain from holding someone in a modal for it — they land on the
+ * integration's page with the rest waiting as a checklist they can finish in
+ * any order, in any sitting.
+ */
+export const ENTRY_SEQUENCE = [0, 1];
+
+/** Steps the entry flow lets you pass without answering. */
+export const SKIPPABLE_STEPS = [1];
+
+/** Dashboard columns the rest of the product depends on. */
+export const REQUIRED_COLUMNS = ['Query Title', 'Created Date', EMAIL_TARGET];
+
+export type SetupTaskId = 'connect' | 'project' | 'fields';
+
+export interface SetupTask {
+  id: SetupTaskId;
+  /** The WIZARD_STEPS index that edits this task. */
+  step: number;
+  title: string;
+  /** What is saved right now, or what the task will ask for. */
+  summary: string;
+  done: boolean;
+  /**
+   * The task that has to happen first. Email, fields and mapping all read the
+   * project's schema, so none of them can be opened until a project is chosen —
+   * saying so is better than offering a step that would open empty.
+   */
+  blockedBy?: SetupTaskId;
+}
+
+/**
+ * The state of a setup, derived from the saved config rather than tracked
+ * alongside it. Deriving means the checklist can never disagree with what is
+ * actually stored — edit a field mapping and the list re-reads itself.
+ */
+export function setupTasks(config: IntegrationConfig): SetupTask[] {
+  const project = config.projects[0];
+  const chosen = config.mappings.filter((m) => m.source.trim());
+  const mapped = chosen.filter((m) => m.target.trim());
+  const unmapped = chosen.filter((m) => !m.target.trim());
+  const missingRequired = REQUIRED_COLUMNS.filter((t) => !mapped.some((m) => m.target === t));
+
+  const hasAccount = !!config.account;
+  const hasProject = !!project;
+  const hasEmail = !!config.emailMapping.sourceField;
+  const hasFields = chosen.length > 0;
+
+  const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+  return [
+    {
+      id: 'connect',
+      step: 0,
+      title: 'Connect your Jira account',
+      done: hasAccount,
+      summary: hasAccount
+        ? `${config.account} · ${config.siteUrl.replace('https://', '')}`
+        : 'Sign in so we can read your issues',
+    },
+    {
+      id: 'project',
+      step: 1,
+      title: 'Choose the project to sync',
+      done: hasProject,
+      summary: project
+        ? `${project.name} (${project.key}) · ${project.issues.toLocaleString()} issues in scope`
+        : 'Not chosen yet — everything below needs this first',
+    },
+    {
+      /*
+       * One task, not three. Choosing a field, saying where it lands and
+       * confirming the email column are the same decision — splitting them
+       * across three rows made a checklist out of what is really "set up your
+       * table", and let you tick two of them while the import was still
+       * incapable of running.
+       *
+       * A half-mapped import silently drops data, so this is only done when
+       * every chosen field lands somewhere and the required columns are fed.
+       */
+      id: 'fields',
+      step: 2,
+      title: 'Choose your fields and where they land',
+      done: hasFields && unmapped.length === 0 && missingRequired.length === 0,
+      blockedBy: hasProject ? undefined : 'project',
+      summary: !hasFields
+        ? 'Nothing chosen yet — one click brings across the usual set'
+        : missingRequired.length
+          ? `${missingRequired.join(' and ')} still ${missingRequired.length > 1 ? 'have' : 'has'} nothing feeding ${missingRequired.length > 1 ? 'them' : 'it'}`
+          : unmapped.length
+            ? `${plural(unmapped.length, 'field')} still without a column`
+            : `${plural(mapped.length, 'field')} → ${plural(mapped.length, 'column')}${
+                hasEmail ? ` · email from ${config.emailMapping.sourceField}` : ''
+              }`,
+    },
+  ];
+}
+
+/** Every task done — the point at which a first sync can run. */
+export function isSetupComplete(config: IntegrationConfig) {
+  return setupTasks(config).every((t) => t.done);
+}
+
+/**
+ * A stable string for everything a sync actually reads. Used only to tell a real
+ * edit from a re-save of identical answers, so the "changes pending" notice
+ * never fires for opening a step and closing it again.
+ */
+export function configFingerprint(config: IntegrationConfig) {
+  return JSON.stringify([
+    config.siteUrl,
+    config.account,
+    config.authMethod,
+    config.projects.map((p) => p.id),
+    [...config.issueTypes].sort(),
+    config.mappings.map((m) => [m.source, m.target, m.label, m.visible, m.filterable]),
+    config.emailMapping.sourceField,
+  ]);
+}
+
+/**
+ * Configuration was edited after the last completed import, so the records on
+ * the dashboard were built from older answers. The fix is always the same —
+ * run a sync — so the page says so rather than leaving the two silently
+ * disagreeing.
+ */
+export function configPendingSync(conn: Connection) {
+  const lastRun = conn.runs.find((r) => r.status === 'completed');
+  if (!lastRun || !isSetupComplete(conn.config)) return false;
+  return new Date(conn.configUpdatedAt).getTime() > new Date(lastRun.startedAt).getTime();
+}
 
 /** Demo credentials — realistic enough for prototype walkthroughs, never reach a real API. */
 const DEMO_PREFILL: Partial<Record<ProviderId, { siteUrl: string; email: string; token: string }>> = {
@@ -446,6 +618,8 @@ export function emptyDraft(providerId: ProviderId): WizardDraft {
   return {
     providerId,
     step: 0,
+    sequence: [...ENTRY_SEQUENCE],
+    mode: 'connect',
     authMethod: 'atlassian',
     siteUrl,
     email,
@@ -467,9 +641,25 @@ export function emptyDraft(providerId: ProviderId): WizardDraft {
 interface IntegrationContextType {
   connections: Partial<Record<ProviderId, Connection>>;
   draft: WizardDraft | null;
-  startWizard: (providerId: ProviderId, authMethod?: AuthMethod) => void;
+  /**
+   * Opens the step host. `sequence` decides what this run covers — the entry
+   * flow by default, or a single step when a task is opened from the
+   * integration's own page.
+   */
+  startWizard: (
+    providerId: ProviderId,
+    opts?: { sequence?: number[]; step?: number; authMethod?: AuthMethod; mode?: 'connect' | 'task'; reviewing?: boolean },
+  ) => void;
   updateDraft: (patch: Partial<WizardDraft>) => void;
   cancelWizard: () => void;
+  /**
+   * Writes the draft onto the connection without closing it. The connect flow
+   * calls this the moment an account links, so an integration exists — and
+   * survives a closed tab — before the project question is even asked.
+   */
+  saveDraft: () => void;
+  /** Starts the first sync of a fully-configured integration. */
+  startFirstSync: (providerId: ProviderId) => void;
   /** Providers the user asked to be told about when they ship. */
   notifyList: ProviderId[];
   toggleNotify: (providerId: ProviderId) => void;
@@ -482,6 +672,8 @@ interface IntegrationContextType {
    */
   migrating: ProviderId | null;
   finishMigration: () => void;
+  /** Stops a run that is still going, keeping whatever it already wrote. */
+  cancelSync: (providerId: ProviderId) => void;
   /** Persists the draft as a connection and kicks off the animated first sync. */
   completeWizard: () => void;
   /** Removes an integration entirely (credentials + imported records). */
@@ -531,6 +723,81 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 
 let runCounter = 0;
 
+/* ------------------------------- Persistence ------------------------------- */
+
+const STORE_KEY = 'integration-state-v1';
+
+interface StoredState {
+  connections: Partial<Record<ProviderId, Connection>>;
+}
+
+/**
+ * Setup progress outlives the tab. A half-finished integration is real work —
+ * an account linked, a project picked, twenty fields chosen — and losing it to
+ * a refresh is the whole reason this flow was reshaped.
+ *
+ * What is *not* stored is the open draft. Every answer is committed to the
+ * connection as it is made, so the draft holds nothing that isn't already
+ * safe — and restoring it meant a half-scrolled editor sprang open over the
+ * page on every single load, which reads as a bug rather than a courtesy.
+ *
+ * A sync that was mid-flight when the tab closed cannot be resumed, so it is
+ * settled on the way back in: the connection is marked idle and the run is
+ * closed as failed. Restoring a progress bar that will never move again would
+ * be worse than admitting it was interrupted.
+ */
+function loadStored(): StoredState {
+  try {
+    const raw = window.localStorage.getItem(STORE_KEY);
+    if (!raw) return { connections: {} };
+    const parsed = JSON.parse(raw) as StoredState;
+    const connections: Partial<Record<ProviderId, Connection>> = {};
+    const now = new Date().toISOString();
+
+    Object.entries(parsed.connections ?? {}).forEach(([id, conn]) => {
+      if (!conn) return;
+      connections[id as ProviderId] = {
+        ...conn,
+        // Connections stored before edits were tracked count as unchanged since
+        // they were made, which is exactly what they are.
+        configUpdatedAt: conn.configUpdatedAt ?? conn.connectedAt,
+        syncing: false,
+        phase: conn.syncing ? 'connecting' : conn.phase,
+        progress: conn.syncing ? 0 : conn.progress,
+        processed: 0,
+        target: 0,
+        runs: (conn.runs ?? []).map((r) =>
+          r.status === 'running'
+            ? {
+                ...r,
+                status: 'failed' as SyncStatus,
+                logs: [
+                  ...r.logs,
+                  { level: 'error' as const, time: now, message: 'Interrupted — the tab closed mid-sync' },
+                ],
+              }
+            : r,
+        ),
+      };
+    });
+
+    return { connections };
+  } catch {
+    // Corrupt or blocked storage shouldn't take the app down with it.
+    return { connections: {} };
+  }
+}
+
+/** Live sync fields are per-session, so they never make it into storage. */
+function forStorage(connections: Partial<Record<ProviderId, Connection>>) {
+  const out: Partial<Record<ProviderId, Connection>> = {};
+  Object.entries(connections).forEach(([id, conn]) => {
+    if (!conn) return;
+    out[id as ProviderId] = { ...conn, syncing: false, processed: 0, target: 0 };
+  });
+  return out;
+}
+
 export function IntegrationProvider({
   children,
   onImport,
@@ -538,7 +805,10 @@ export function IntegrationProvider({
   children: ReactNode;
   onImport?: (rows: ImportedRow[]) => void;
 }) {
-  const [connections, setConnectionsState] = useState<Partial<Record<ProviderId, Connection>>>({});
+  const [stored] = useState(loadStored);
+  const [connections, setConnectionsState] = useState<Partial<Record<ProviderId, Connection>>>(
+    stored.connections,
+  );
   // Mirror of `connections` so async sync callbacks can read the latest value
   // without keeping every connection in their dependency list.
   const connectionsRef = useRef(connections);
@@ -553,25 +823,68 @@ export function IntegrationProvider({
   const [notifyList, setNotifyList] = useState<ProviderId[]>([]);
   const [firstSyncDone, setFirstSyncDone] = useState<ProviderId | null>(null);
   const [migrating, setMigrating] = useState<ProviderId | null>(null);
+  /** Live sync tickers, so a run in flight can actually be stopped. */
+  const syncTimers = useRef<Partial<Record<ProviderId, number>>>({});
 
-  const startWizard = useCallback((providerId: ProviderId, authMethod?: AuthMethod) => {
+  /**
+   * Debounced so a running sync — which ticks progress every 120ms — doesn't
+   * hammer localStorage. Nothing time-sensitive is being written; the point is
+   * only that closing the tab loses at most a fraction of a second of setup.
+   */
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      try {
+        window.localStorage.setItem(
+          STORE_KEY,
+          JSON.stringify({ connections: forStorage(connections) } satisfies StoredState),
+        );
+      } catch {
+        // Private browsing or a full quota — the session still works in memory.
+      }
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [connections]);
+
+  const startWizard = useCallback((
+    providerId: ProviderId,
+    opts: { sequence?: number[]; step?: number; authMethod?: AuthMethod; mode?: 'connect' | 'task'; reviewing?: boolean } = {},
+  ) => {
     const existing = connectionsRef.current[providerId];
+    const sequence = opts.sequence ?? [...ENTRY_SEQUENCE];
+    const step = opts.step ?? sequence[0] ?? 0;
+    const mode = opts.mode ?? (sequence.length === 1 ? 'task' : 'connect');
+
     if (!existing) {
-      setDraft({ ...emptyDraft(providerId), ...(authMethod ? { authMethod } : {}) });
+      setDraft({
+        ...emptyDraft(providerId),
+        sequence,
+        step,
+        mode,
+        reviewing: opts.reviewing,
+        ...(opts.authMethod ? { authMethod: opts.authMethod } : {}),
+      });
       return;
     }
-    // Reconfiguring: seed the wizard from the saved configuration.
+    /*
+     * A connection already exists — either a half-finished setup or a live one.
+     * Either way the draft is seeded from what is saved, so opening a step
+     * shows the answer already there rather than an empty form.
+     */
     setDraft({
       ...emptyDraft(providerId),
-      authMethod: authMethod ?? existing.config.authMethod,
-      connected: true,
+      sequence,
+      step,
+      mode,
+      reviewing: opts.reviewing,
+      authMethod: opts.authMethod ?? existing.config.authMethod,
+      connected: !!existing.config.account,
       siteUrl: existing.config.siteUrl,
       email: existing.config.account,
       projectIds: existing.config.projects.slice(0, 1).map((p) => p.id),
       issueTypes: existing.config.issueTypes,
       mappings: existing.config.mappings.map((m) => ({ ...m })),
-      // Reconfiguring starts from a real selection, so never re-seed over it.
-      fieldsSeeded: true,
+      // Seeding from real answers — never re-seed the starter fields over them.
+      fieldsSeeded: existing.config.mappings.length > 0,
       emailMapping: { ...existing.config.emailMapping },
     });
   }, []);
@@ -623,11 +936,18 @@ export function IntegrationProvider({
   }, []);
 
   /**
-   * `instant` is used after the migration takeover: the animation has already
-   * told that story at length, so the run completes in a couple of frames
-   * instead of replaying a progress bar the user just watched.
+   * How fast the ticker walks.
+   *
+   * The first import is the one somebody actually watches — it is the moment
+   * they find out whether any of this worked — so it is paced slowly enough
+   * that its progress, its counts and its stage list mean something. Every
+   * later sync is a background chore and just gets on with it.
    */
-  const runSyncForConfig = useCallback((providerId: ProviderId, retryFailed: boolean, instant = false) => {
+  const runSyncForConfig = useCallback((
+    providerId: ProviderId,
+    retryFailed: boolean,
+    pace: 'first' | 'routine' = 'routine',
+  ) => {
     // Ignore overlapping runs so a double click cannot schedule two completions.
     const existing = connectionsRef.current[providerId];
     if (!existing || existing.syncing) return;
@@ -669,6 +989,7 @@ export function IntegrationProvider({
     let nextPhase = 0;
 
     const timer = window.setInterval(() => {
+
       let finished = false;
       let importedRows: ImportedRow[] = [];
 
@@ -679,7 +1000,7 @@ export function IntegrationProvider({
           return prev;
         }
 
-        const progress = Math.min(100, conn.progress + (instant ? 50 : 4));
+        const progress = Math.min(100, conn.progress + (pace === 'first' ? 0.6 : 4));
         const processed = Math.round((progress / 100) * imported);
         let runs = conn.runs;
 
@@ -744,14 +1065,52 @@ export function IntegrationProvider({
       });
 
       if (finished && importedRows.length) onImport?.(importedRows);
-    }, instant ? 16 : 120);
+    }, 120);
+    syncTimers.current[providerId] = timer;
   }, [generateRows, onImport, setConnections]);
 
-  const completeWizard = useCallback(() => {
-    const d = draft;
-    if (!d) return;
-    /** First-time setups get the full-screen migration; reconfigures just re-sync. */
-    const firstTime = !connectionsRef.current[d.providerId];
+  /**
+   * Stop a run that is still going. The records already written stay — they are
+   * real — so the run is closed as failed with what it managed, rather than
+   * pretending it never happened.
+   */
+  const cancelSync = useCallback((providerId: ProviderId) => {
+    const timer = syncTimers.current[providerId];
+    if (timer) { window.clearInterval(timer); delete syncTimers.current[providerId]; }
+    setConnections((prev) => {
+      const conn = prev[providerId];
+      if (!conn || !conn.syncing) return prev;
+      const at = new Date().toISOString();
+      return {
+        ...prev,
+        [providerId]: {
+          ...conn,
+          syncing: false,
+          runs: conn.runs.map((r) =>
+            r.status === 'running'
+              ? {
+                  ...r,
+                  status: 'failed' as SyncStatus,
+                  imported: conn.processed,
+                  logs: [...r.logs, { level: 'warn' as const, time: at, message: 'Stopped — cancelled from the import screen' }],
+                }
+              : r,
+          ),
+        },
+      };
+    });
+  }, [setConnections]);
+
+  /**
+   * Saves whatever the draft holds onto the connection and closes the host.
+   *
+   * It no longer starts a sync. Finishing a step is just saving — a setup can
+   * sit half-done for a week and the answers are still there. Importing is a
+   * deliberate act now, triggered from the integration's page once every task
+   * is green, which is also the only point at which the config is coherent
+   * enough to import from.
+   */
+  const commitDraft = useCallback((d: WizardDraft) => {
     const config: IntegrationConfig = {
       providerId: d.providerId,
       siteUrl: d.siteUrl,
@@ -762,27 +1121,69 @@ export function IntegrationProvider({
       mappings: d.mappings,
       emailMapping: d.emailMapping,
     };
-    setConnections((prev) => ({
-      ...prev,
-      [d.providerId]: prev[d.providerId]
-        ? { ...prev[d.providerId]!, config }
-        : {
-            config, connectedAt: new Date().toISOString(), runs: [], totalImported: 0,
+    const now = new Date().toISOString();
+    setConnections((prev) => {
+      const existing = prev[d.providerId];
+      if (!existing) {
+        return {
+          ...prev,
+          [d.providerId]: {
+            config, connectedAt: now, configUpdatedAt: now, runs: [], totalImported: 0,
             syncing: false, phase: 'connecting', progress: 0, processed: 0, target: 0,
           },
-    }));
-    setDraft(null);
-    if (firstTime) setMigrating(d.providerId);
-    else window.setTimeout(() => runSyncForConfig(d.providerId, false), 60);
-  }, [draft, runSyncForConfig, setConnections]);
+        };
+      }
+      // Opening a step and saving it unchanged is not an edit, so the stamp —
+      // and the "changes pending sync" notice that reads it — stays put.
+      const changed = configFingerprint(existing.config) !== configFingerprint(config);
+      return {
+        ...prev,
+        [d.providerId]: {
+          ...existing,
+          config,
+          configUpdatedAt: changed ? now : existing.configUpdatedAt,
+        },
+      };
+    });
+  }, [setConnections]);
 
-  /** The takeover ran its course — write the records and let the page through. */
-  const finishMigration = useCallback(() => {
-    const providerId = migrating;
-    if (!providerId) return;
-    setMigrating(null);
-    runSyncForConfig(providerId, false, true);
-  }, [migrating, runSyncForConfig]);
+  /** Save and keep going — used the instant an account links. */
+  const saveDraft = useCallback(() => {
+    if (draft) commitDraft(draft);
+  }, [draft, commitDraft]);
+
+  /**
+   * Saves and closes. It no longer starts a sync: finishing a step is just
+   * saving, and importing is a deliberate act from the integration's page once
+   * every task is green.
+   */
+  const completeWizard = useCallback(() => {
+    if (!draft) return;
+    commitDraft(draft);
+    setDraft(null);
+  }, [draft, commitDraft]);
+
+  /**
+   * The first import. A never-synced integration gets the full-screen
+   * migration; everything after that is a quiet background run.
+   */
+  const startFirstSync = useCallback((providerId: ProviderId) => {
+    const conn = connectionsRef.current[providerId];
+    if (!conn || conn.syncing || !isSetupComplete(conn.config)) return;
+    // The first import gets the full-screen treatment and a slower pace, and
+    // the run starts with it — the screen reports a real sync rather than
+    // playing an animation and doing the work afterwards.
+    const first = conn.runs.length === 0;
+    if (first) setMigrating(providerId);
+    runSyncForConfig(providerId, false, first ? 'first' : 'routine');
+  }, [runSyncForConfig]);
+
+  /**
+   * Leave the import screen. The run is not tied to it — closing this just
+   * stops watching, which is the whole point of being able to walk away from a
+   * ten-minute job.
+   */
+  const finishMigration = useCallback(() => setMigrating(null), []);
 
   const removeIntegration = useCallback((providerId: ProviderId) => {
     setConnections((prev) => {
@@ -821,9 +1222,9 @@ export function IntegrationProvider({
     <IntegrationContext.Provider
       value={{
         connections, draft, filterFields,
-        startWizard, updateDraft, cancelWizard, completeWizard,
+        startWizard, updateDraft, cancelWizard, completeWizard, saveDraft, startFirstSync,
         notifyList, toggleNotify, firstSyncDone, acknowledgeFirstSync,
-        migrating, finishMigration,
+        migrating, finishMigration, cancelSync,
         removeIntegration, runSync: (id, retry = false) => runSyncForConfig(id, retry), updateConfig,
       }}
     >
@@ -840,6 +1241,7 @@ const NOOP_INTEGRATIONS: IntegrationContextType = {
   firstSyncDone: null,
   migrating: null,
   finishMigration: () => {},
+  cancelSync: () => {},
   startWizard: () => {},
   updateDraft: () => {},
   cancelWizard: () => {},

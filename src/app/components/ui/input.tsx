@@ -2,9 +2,18 @@ import * as React from "react";
 
 import { cn } from "./utils";
 
-function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+/**
+ * Forwards its ref. Without this, `ref` on an <Input> is silently dropped —
+ * React warns to the console and `ref.current` stays null, so anything that
+ * needs to focus or select the field (a Rename button, a form library, an
+ * autofocus-on-error) fails quietly. Purely additive: every existing usage
+ * renders exactly as before.
+ */
+const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
+  function Input({ className, type, ...props }, ref) {
   return (
     <input
+      ref={ref}
       type={type}
       data-slot="input"
       className={cn(
@@ -16,6 +25,6 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
       {...props}
     />
   );
-}
+});
 
 export { Input };

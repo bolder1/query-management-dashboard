@@ -1,85 +1,67 @@
-import { useEffect, useState } from 'react';
-import {
-  X, Check, ChevronLeft, ChevronRight, Play, Info, ShieldCheck, Loader2,
-  Maximize2, Minimize2, FlaskConical,
-} from 'lucide-react';
+import { useEffect } from 'react';
+import { X, Check, Info, Save, Lock } from 'lucide-react';
 import { Button } from '../ui/button';
+import { Trail } from '../ui/trail';
 import { toast } from 'sonner';
 import {
-  useIntegrations, PROVIDERS, WIZARD_STEPS, MOCK_PROJECTS,
+  useIntegrations, PROVIDERS, WIZARD_STEPS, REQUIRED_COLUMNS,
 } from '../../contexts/IntegrationContext';
 import { useNav } from '../../contexts/NavContext';
 import { ProviderLogo } from './shared';
 import { StepConnect } from './StepConnect';
 import { StepProject } from './StepProject';
-import { StepEmailMapping } from './StepEmailMapping';
-import { StepSelectFields } from './StepSelectFields';
-import { StepFieldMapping } from './StepFieldMapping';
-import { StepReview } from './StepReview';
-import {
-  LAYOUT_LABELS, LAYOUT_STYLES, useWizardLayout, type WizardLayout,
-} from './wizardLayout';
-
-const LAST = WIZARD_STEPS.length - 1;
+import { StepMapFields } from './StepMapFields';
 
 /**
- * The headline and standfirst for each step. Keeping this in the shell means
- * every step opens the same way and the step bodies hold only their controls.
+ * Setup, full screen.
+ *
+ * It used to be a dialog that could also be a full-screen page — an A/B toggle
+ * sat in the top bar and the two shells shared a styles map. The test is over.
+ * A dialog was the wrong frame for this work: the mapping step wants a list on
+ * one side and a live preview of the result on the other, and a 46rem-tall
+ * popup floating over a page you cannot use is the one shape that cannot give
+ * it that. So there is one shell, it owns the screen, and the steps get to lay
+ * themselves out properly inside it.
+ *
+ * The numbered rail replaces the old "one step, alone" framing. Every answer
+ * still saves independently, so moving between steps in here is free — the
+ * draft carries all three and Save commits the lot.
  */
+
+/** The headline and one-line standfirst for each step. */
 const STEP_COPY: { title: string; description: string }[] = [
   {
-    title: 'First, connect your Jira account',
-    description:
-      'Pick how you want to sign in. Either way the access we ask for is read-only — nothing is ever written back to Jira.',
+    title: 'Connect your Jira account',
+    description: 'Either route grants read-only access — nothing is written back to Jira.',
   },
   {
     title: 'Which project should we sync?',
-    description:
-      'One project per connection. Search your Jira site and pick the one your customer queries live in — you can add more connections later.',
+    description: 'One project per connection. You can add more connections later.',
   },
   {
-    title: 'Where does the email address come from?',
+    title: 'Build your table',
     description:
-      'Pick the Jira field we should fetch the customer’s email from. It lands in your Email column and arrives pre-connected on the mapping step.',
-  },
-  {
-    title: 'What should we bring across?',
-    description:
-      'Add the Jira fields that belong in the dashboard. The order you set here becomes your column order.',
-  },
-  {
-    title: 'Connect your fields to columns',
-    description:
-      'Click a Jira field, then the dashboard column it should fill. Connected pairs are drawn as you go.',
-  },
-  {
-    title: 'Ready to sync — take a last look',
-    description:
-      'Nothing is imported until you start the sync. Every line here stays editable from the integration page afterwards.',
+      'Each row is a column on your dashboard. Say which Jira field fills it — or press Connect all and change what you disagree with.',
   },
 ];
 
 export function ConnectionWizard() {
-  const { draft, updateDraft, cancelWizard, completeWizard, connections } = useIntegrations();
+  const { draft, updateDraft, cancelWizard, completeWizard } = useIntegrations();
   const { setPage, openDetail } = useNav();
-  const [confirmExit, setConfirmExit] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [layout, setLayout] = useWizardLayout();
-  const L = LAYOUT_STYLES[layout];
 
-  // Escape closes the wizard through the same guard as the close button.
+  // Escape abandons the edit. The stored answer is untouched either way, so
+  // there is nothing to warn about.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || confirmExit || !draft) return;
+      if (e.key !== 'Escape' || !draft) return;
       e.preventDefault();
-      if (draft.step === 0 && !draft.connected) cancelWizard();
-      else setConfirmExit(true);
+      cancelWizard();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [confirmExit, draft, cancelWizard]);
+  }, [draft, cancelWizard]);
 
-  // A full-screen takeover shouldn't leave the page scrolling behind it.
+  // A takeover shouldn't leave the page scrolling behind it.
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -89,349 +71,223 @@ export function ConnectionWizard() {
   if (!draft) return null;
   const provider = PROVIDERS.find((p) => p.id === draft.providerId)!;
   const step = draft.step;
-  /** Reconfiguring an existing connection rather than setting one up. */
-  const editing = !!connections[draft.providerId];
+  const copy = STEP_COPY[step];
 
-  /** Fields chosen on step 4 that still have no column on step 5. */
-  const unconnected = draft.mappings.filter((m) => m.source.trim() && !m.target.trim());
+  /** The only unsaveable state: an account that never linked. */
+  const blocked = step === 0 && !draft.connected ? 'Connect your account to continue.' : '';
 
-  const blocked = (() => {
-    if (step === 0 && !draft.connected) return 'Connect your account to continue.';
-    if (step === 1 && draft.projectIds.length === 0) return 'Select a project to continue.';
-    if (step === 2 && !draft.emailMapping.sourceField) return 'Choose the field the email comes from.';
-    if (step === 3 && draft.mappings.length === 0) return 'Select at least one Jira field.';
-    // Every chosen field must land somewhere — a half-mapped import silently
-    // drops data, so the wizard holds you here until it's complete.
-    if (step === 4 && unconnected.length > 0) {
-      return `Connect ${unconnected.length} more field${unconnected.length > 1 ? 's' : ''} to continue — or remove ${unconnected.length > 1 ? 'them' : 'it'} on the previous step.`;
+  /** Saveable, but not finished — the checklist will say so too. */
+  const incomplete = (() => {
+    if (step === 1 && draft.projectIds.length === 0) return 'No project chosen yet';
+    if (step === 2) {
+      const missing = REQUIRED_COLUMNS.filter(
+        (c) => !draft.mappings.some((m) => m.target === c && m.source.trim()),
+      );
+      if (missing.length) {
+        const list = missing.length < 3
+          ? missing.join(' and ')
+          : `${missing.slice(0, -1).join(', ')} and ${missing[missing.length - 1]}`;
+        return `${list} still empty`;
+      }
+      const open = draft.mappings.filter((m) => !m.source.trim()).length;
+      if (open) return `${open} column${open > 1 ? 's' : ''} still without a Jira field`;
     }
     return '';
   })();
 
+  /** A step you cannot answer yet, and why — the rail reads this. */
+  const lockedReason = (target: number) => {
+    if (target > 0 && !draft.connected) return 'Connect your account first';
+    if (target > 1 && draft.projectIds.length === 0) return 'Choose a project first';
+    return '';
+  };
+
   const goToStep = (s: number) => {
-    if (s > step && blocked) return;
-    updateDraft({ step: Math.max(0, Math.min(LAST, s)) });
+    if (lockedReason(s)) return;
+    updateDraft({ step: s, sequence: [s] });
   };
 
-  const handleClose = () => {
-    // Nothing worth keeping on step 1 of a brand-new setup.
-    if (step === 0 && !draft.connected) {
-      cancelWizard();
-      return;
-    }
-    setConfirmExit(true);
-  };
-
-  const discardAndClose = () => {
-    setConfirmExit(false);
-    cancelWizard();
-    toast.info(
-      editing ? 'Changes discarded' : 'Setup discarded',
-      { description: editing ? 'The live connection is untouched.' : undefined },
-    );
-  };
-
-  const finish = () => {
+  const save = () => {
     const providerId = draft.providerId;
-    const firstTime = !connections[providerId];
-    setStarting(true);
     completeWizard();
-    setPage('Integrations');
+    // No `setPage` first — that would close the integration and lose whichever
+    // section this editor was opened from.
     openDetail(providerId);
-    // A first-time setup hands over to the full-screen migration, which does its
-    // own announcing; a reconfigure just re-syncs quietly in the background.
-    if (!firstTime) {
-      toast.success('Configuration updated — sync started', {
-        description: `${provider.name} records are being imported into Query Results.`,
-      });
-    }
+    toast.success('Saved', { description: `${WIZARD_STEPS[step].title} updated.` });
   };
 
-  const project = MOCK_PROJECTS.find((p) => p.id === draft.projectIds[0]);
-  const copy = STEP_COPY[step];
-  const progress = ((step + 1) / WIZARD_STEPS.length) * 100;
   /**
-   * The email and field steps own lists that should scroll inside themselves
-   * rather than scrolling the page behind them, so they get the panel's exact
-   * height to work with. Every other step keeps its natural height.
+   * The trail out. This editor owns the screen rather than living on the
+   * integration's page, so its crumbs have to actually navigate — each one
+   * closes it and lands where it says. Nothing here is saved on the way, which
+   * is the same bargain the Cancel button and Escape already make.
    */
-  const fillsPanel = step === 2 || step === 3;
+  const leaveTo = (dest: 'list' | 'detail' | 'setup') => () => {
+    const providerId = draft.providerId;
+    cancelWizard();
+    if (dest === 'list') { setPage('Integrations'); return; }
+    openDetail(providerId, dest === 'setup' ? 'setup' : undefined);
+  };
+
+  /**
+   * The mapping step wants the whole width for its list-plus-preview; the two
+   * short steps before it want a readable column in the middle of the screen.
+   */
+  const wide = step === 2;
 
   return (
-    <div
-      className={L.scrim}
-      onMouseDown={(e) => {
-        if (L.dismissOnScrimClick && e.target === e.currentTarget) handleClose();
-      }}
-    >
-      <div className={L.panel}>
-        {/* ------------------------------- Left rail ------------------------------ */}
-        <aside className={L.rail}>
-        <div className="px-7 pt-7">
-          <div className="flex items-center gap-3">
-            <ProviderLogo provider={provider} size={36} />
-            <div className="min-w-0">
-              <p className="text-sm font-semibold truncate">
-                {editing ? `Reconfigure ${provider.name}` : `Set up ${provider.name}`}
-              </p>
-              <p className="text-xs text-white/60 truncate">
-                {draft.connected ? draft.siteUrl.replace('https://', '') : 'Not connected yet'}
-              </p>
-            </div>
-          </div>
+    <div className="fixed inset-0 z-50 flex flex-col bg-white dark:bg-gray-950">
+      {/* ---------------------------------- Top --------------------------------- */}
+      <header className="shrink-0 flex items-center gap-3 px-3 sm:px-5 h-14 border-b border-gray-200 dark:border-gray-800">
+        <button
+          onClick={cancelWizard}
+          aria-label="Close without saving"
+          className="shrink-0 h-8 w-8 rounded-md flex items-center justify-center text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-200"
+        >
+          <X className="h-4 w-4" />
+        </button>
+        <span className="h-5 w-px bg-gray-200 dark:bg-gray-700 shrink-0" />
+        <ProviderLogo provider={provider} size={24} />
+        <Trail
+          className="min-w-0"
+          items={[
+            { label: 'Integrations', onClick: leaveTo('list'), title: 'Leave without saving' },
+            { label: provider.name, onClick: leaveTo('detail'), title: 'Leave without saving' },
+            { label: 'Setup', onClick: leaveTo('setup'), title: 'Leave without saving' },
+          ]}
+        />
 
-          <p className="mt-7 text-[32px] leading-none font-semibold tracking-tight">
-            {step + 1}
-            <span className="text-white/60 text-xl"> / {WIZARD_STEPS.length}</span>
+        <div className="flex-1" />
+
+        <StepRail current={step} lockedReason={lockedReason} onGo={goToStep} />
+      </header>
+
+      {/* --------------------------------- Body --------------------------------- */}
+      <main className="flex-1 min-h-0 flex flex-col">
+        {/*
+         * The two short steps get a headline and a standfirst, because that is
+         * the only framing they have. The mapping step does not: its own beats
+         * each carry a heading and a sentence, so this block was saying the
+         * same thing twice and charging 124px of a 790px screen for it — on the
+         * one step that is starved of height. It states its title inline with
+         * its rail instead.
+         */}
+        {!wide && (
+          <div className="shrink-0 w-full px-5 sm:px-8 pt-6 pb-4 mx-auto max-w-4xl">
+            <h1 className="text-2xl lg:text-[26px] leading-tight font-semibold text-gray-900 dark:text-white">
+              {copy.title}
+            </h1>
+            <p className="text-[15px] text-gray-500 dark:text-gray-400 mt-1.5 max-w-3xl">
+              {copy.description}
+            </p>
+          </div>
+        )}
+
+        <div
+          className={`flex-1 min-h-0 w-full px-5 sm:px-8 pb-4 flex flex-col ${
+            wide ? 'lg:px-10 pt-4' : 'mx-auto max-w-4xl'
+          }`}
+        >
+          {step === 0 && (
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <StepConnect draft={draft} update={updateDraft} />
+            </div>
+          )}
+          {step === 1 && <StepProject draft={draft} update={updateDraft} />}
+          {step === 2 && <StepMapFields draft={draft} update={updateDraft} />}
+        </div>
+      </main>
+
+      {/* -------------------------------- Bottom -------------------------------- */}
+      <footer className="shrink-0 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-5 sm:px-8 lg:px-10 py-3">
+          <p className="text-[13px] text-gray-500 dark:text-gray-400 min-w-0 flex items-center gap-1.5">
+            {blocked ? (
+              <>
+                <Info className="h-4 w-4 shrink-0 text-amber-500" />
+                <span className="truncate">{blocked}</span>
+              </>
+            ) : incomplete ? (
+              <>
+                {/* Saving unfinished work is expected, so this states the fact
+                    rather than warning about it. */}
+                <Save className="h-4 w-4 shrink-0" />
+                <span className="truncate">{incomplete} — you can finish this later</span>
+              </>
+            ) : (
+              <span className="hidden sm:inline">Changes save to your integration</span>
+            )}
           </p>
-        </div>
-
-        {/* Vertical stepper */}
-        <nav className="flex-1 min-h-0 overflow-y-auto px-4 py-6">
-          <ol>
-            {WIZARD_STEPS.map((s, i) => {
-              const done = i < step;
-              const current = i === step;
-              const reachable = i <= step || !blocked;
-              const last = i === LAST;
-              return (
-                <li key={s.title} className="relative">
-                  {/* Connector to the next step */}
-                  {!last && (
-                    <span
-                      className={`absolute left-[26px] top-[30px] bottom-0 w-px ${
-                        done ? 'bg-emerald-400/60' : 'bg-white/12'
-                      }`}
-                    />
-                  )}
-                  <button
-                    onClick={() => reachable && goToStep(i)}
-                    disabled={!reachable}
-                    aria-current={current ? 'step' : undefined}
-                    className={`relative w-full flex items-start gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
-                      current
-                        ? 'bg-white/10'
-                        : reachable
-                          ? 'hover:bg-white/5 cursor-pointer'
-                          : 'cursor-not-allowed'
-                    }`}
-                  >
-                    <span
-                      className={`h-6 w-6 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0 transition-colors ${
-                        done
-                          ? 'bg-emerald-500 text-white'
-                          : current
-                            ? 'bg-white text-[var(--rail-bg)]'
-                            : 'border border-white/30 text-white/60'
-                      }`}
-                    >
-                      {done ? <Check className="h-3 w-3" /> : i + 1}
-                    </span>
-                    <span className="min-w-0">
-                      <span
-                        className={`block text-sm font-medium ${
-                          current ? 'text-white' : done ? 'text-white/80' : 'text-white/60'
-                        }`}
-                      >
-                        {s.title}
-                      </span>
-                      <span
-                        className={`block text-xs mt-0.5 ${current ? 'text-white/70' : 'text-white/50'}`}
-                      >
-                        {s.hint}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ol>
-        </nav>
-
-        <div className="px-7 pb-7">
-          <div className="flex items-start gap-2.5 rounded-lg bg-white/5 px-3 py-2.5">
-            <ShieldCheck className="h-4 w-4 text-emerald-400 mt-0.5 shrink-0" />
-            <p className="text-xs text-white/65 leading-relaxed">
-              Read-only access. Credentials are encrypted and nothing is written back to {provider.name}.
-            </p>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button variant="ghost" size="sm" onClick={cancelWizard}>
+              Cancel
+            </Button>
+            <Button disabled={!!blocked} onClick={save}>
+              <Check className="h-3.5 w-3.5 mr-1.5" />
+              Save
+            </Button>
           </div>
         </div>
-      </aside>
-
-      {/* ------------------------------ Right panel ----------------------------- */}
-      <div className="flex-1 min-w-0 flex flex-col">
-        {/* Top bar */}
-        <div className="shrink-0 border-b border-gray-200 dark:border-gray-800">
-          <div className="h-0.5 bg-gray-100 dark:bg-gray-800">
-            <div
-              className="h-full bg-blue-600 transition-[width] duration-300 ease-out"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <div className="flex items-center justify-between gap-3 px-6 lg:px-10 py-3.5">
-            <div className="min-w-0 flex items-center gap-2.5">
-              <span className="lg:hidden">
-                <ProviderLogo provider={provider} size={28} />
-              </span>
-              <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                <span className="lg:hidden font-medium text-gray-700 dark:text-gray-300">
-                  {editing ? 'Reconfigure' : 'Set up'} {provider.name} ·{' '}
-                </span>
-                Step {step + 1} of {WIZARD_STEPS.length} · {WIZARD_STEPS[step].title}
-                {project && step > 1 && ` · ${project.key}`}
-              </p>
-            </div>
-            <div className="flex items-center gap-2 shrink-0">
-              <LayoutToggle layout={layout} onChange={setLayout} />
-              <span className="h-4 w-px bg-gray-200 dark:bg-gray-700 hidden sm:block" />
-              <button
-                onClick={handleClose}
-                aria-label="Close setup"
-                className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800"
-              >
-                <X className="h-4 w-4" />
-                <span className="hidden sm:inline">Close</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Scrolling content */}
-        <div className="flex-1 min-h-0 overflow-y-auto">
-          <div className={`${L.content} ${fillsPanel ? 'h-full flex flex-col' : ''}`}>
-            <header className={fillsPanel ? 'shrink-0' : undefined}>
-              <p className="text-xs font-semibold tracking-widest text-blue-600 dark:text-blue-400 uppercase">
-                {WIZARD_STEPS[step].title}
-              </p>
-              <h1 className="text-2xl lg:text-[28px] leading-tight font-semibold text-gray-900 dark:text-white mt-2">
-                {copy.title}
-              </h1>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-2.5 leading-relaxed">
-                {copy.description}
-              </p>
-            </header>
-
-            <div className={`mt-8 ${fillsPanel ? 'flex-1 min-h-0' : ''}`}>
-              {step === 0 && <StepConnect draft={draft} update={updateDraft} />}
-              {step === 1 && <StepProject draft={draft} update={updateDraft} />}
-              {step === 2 && <StepEmailMapping draft={draft} update={updateDraft} />}
-              {step === 3 && <StepSelectFields draft={draft} update={updateDraft} />}
-              {step === 4 && <StepFieldMapping draft={draft} update={updateDraft} />}
-              {step === 5 && <StepReview draft={draft} goToStep={goToStep} />}
-            </div>
-          </div>
-        </div>
-
-        {/* Footer */}
-        <div className="shrink-0 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950">
-          <div className={`${L.bar} py-3.5 flex flex-wrap items-center justify-end gap-3`}>
-            <div className="flex items-center gap-3">
-              {blocked && (
-                <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-                  <Info className="h-3.5 w-3.5" />
-                  {blocked}
-                </span>
-              )}
-              <Button variant="outline" size="sm" disabled={step === 0} onClick={() => goToStep(step - 1)}>
-                <ChevronLeft className="h-3.5 w-3.5 mr-1" />
-                Back
-              </Button>
-              {step < LAST ? (
-                <Button size="sm" disabled={!!blocked} onClick={() => goToStep(step + 1)}>
-                  Continue
-                  <ChevronRight className="h-3.5 w-3.5 ml-1" />
-                </Button>
-              ) : (
-                <Button size="sm" disabled={starting} onClick={finish}>
-                  {starting ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  ) : (
-                    <Play className="h-3.5 w-3.5 mr-1.5" />
-                  )}
-                  {editing ? 'Save & sync' : 'Start Sync'}
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-        </div>
-      </div>
-
-      {confirmExit && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm px-4">
-          <div className="bg-white dark:bg-gray-900 rounded-xl shadow-2xl w-full max-w-sm p-5">
-            <h3 className="text-base font-semibold text-gray-900 dark:text-white">
-              {editing ? 'Discard these changes?' : 'Leave setup?'}
-            </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1.5">
-              {editing
-                ? 'Your live connection keeps its current configuration and nothing stops syncing.'
-                : `You're on step ${step + 1} of ${WIZARD_STEPS.length}. Everything you've filled in will be lost
-                   and nothing will be synced.`}
-            </p>
-            <div className="flex flex-wrap justify-end gap-2 mt-5">
-              <Button variant="ghost" size="sm" onClick={() => setConfirmExit(false)}>
-                Keep editing
-              </Button>
-              <Button
-                size="sm"
-                className="bg-red-600 hover:bg-red-700 text-white"
-                onClick={discardAndClose}
-              >
-                {editing ? 'Discard changes' : 'Discard setup'}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      </footer>
     </div>
   );
 }
 
 /**
- * Switches the wizard between its two shells mid-flow. Every answer is held in
- * the draft, so flipping keeps you on the same step with the same data — which
- * is what makes a side-by-side comparison meaningful.
+ * Where you are in the three, and what is still out of reach.
+ *
+ * A step you cannot answer yet says why on hover rather than simply refusing
+ * the click — "Choose a project first" is the difference between a locked door
+ * and a locked door with a sign on it.
  */
-function LayoutToggle({
-  layout,
-  onChange,
+function StepRail({
+  current,
+  lockedReason,
+  onGo,
 }: {
-  layout: WizardLayout;
-  onChange: (l: WizardLayout) => void;
+  current: number;
+  lockedReason: (step: number) => string;
+  onGo: (step: number) => void;
 }) {
-  const options: { id: WizardLayout; icon: typeof Maximize2 }[] = [
-    { id: 'popup', icon: Minimize2 },
-    { id: 'fullscreen', icon: Maximize2 },
-  ];
-
   return (
-    <div
-      role="radiogroup"
-      aria-label="Wizard layout"
-      title="A/B test: switch the form between a popup and a full-screen page"
-      className="flex items-center gap-1 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 p-0.5"
-    >
-      <FlaskConical className="h-3 w-3 text-gray-400 dark:text-gray-500 ml-1 mr-0.5 hidden sm:block" />
-      {options.map((o) => {
-        const on = layout === o.id;
+    <nav aria-label="Setup steps" className="shrink-0 flex items-center gap-1">
+      {WIZARD_STEPS.map((s, i) => {
+        const on = i === current;
+        const locked = !!lockedReason(i);
+        const done = i < current && !locked;
         return (
           <button
-            key={o.id}
-            role="radio"
-            aria-checked={on}
-            onClick={() => onChange(o.id)}
-            className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+            key={s.title}
+            type="button"
+            onClick={() => onGo(i)}
+            disabled={locked}
+            title={lockedReason(i) || s.hint}
+            aria-current={on ? 'step' : undefined}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-2 sm:px-2.5 py-1.5 text-[13px] font-medium transition-colors disabled:cursor-not-allowed ${
               on
-                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+                ? 'bg-gray-900 dark:bg-gray-700 text-white'
+                : locked
+                  ? 'text-gray-300 dark:text-gray-600'
+                  : 'text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
             }`}
           >
-            <o.icon className="h-3.5 w-3.5" />
-            <span className="hidden md:inline">{LAYOUT_LABELS[o.id]}</span>
+            <span
+              className={`h-5 w-5 rounded-full flex items-center justify-center text-[11px] font-semibold shrink-0 ${
+                on
+                  ? 'bg-white/20 text-white'
+                  : done
+                    ? 'bg-emerald-500 text-white'
+                    : locked
+                      ? 'bg-gray-100 dark:bg-gray-800'
+                      : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
+              }`}
+            >
+              {done ? <Check className="h-3 w-3" /> : locked ? <Lock className="h-2.5 w-2.5" /> : i + 1}
+            </span>
+            <span className="hidden md:inline">{s.title}</span>
           </button>
         );
       })}
-    </div>
+    </nav>
   );
 }

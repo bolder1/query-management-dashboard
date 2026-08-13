@@ -14,6 +14,7 @@ import { IntegrationInsights } from './components/IntegrationInsights';
 import { IntegrationsPage } from './components/integrations/IntegrationsPage';
 import { IntegrationDetail } from './components/integrations/IntegrationDetail';
 import { ConnectionWizard } from './components/integrations/ConnectionWizard';
+import { ConnectFlow } from './components/integrations/ConnectFlow';
 import { MigrationTakeover } from './components/integrations/MigrationTakeover';
 import { Toaster } from 'sonner';
 
@@ -47,7 +48,10 @@ function Pages() {
 
   return (
     <>
-      {draft && <ConnectionWizard />}
+      {/* Two shells: a compact dialog for linking an account, and the step
+          host for changing one saved answer. */}
+      {draft?.mode === 'connect' && <ConnectFlow />}
+      {draft?.mode === 'task' && <ConnectionWizard />}
       <MigrationTakeover />
       <DashboardHeader />
 

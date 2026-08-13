@@ -1,6 +1,7 @@
 import { ReactNode } from 'react';
-import { CheckCircle2, AlertCircle, Loader2, CircleDashed } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Loader2, CircleDashed, type LucideIcon } from 'lucide-react';
 import type { Provider, SyncStatus } from '../../contexts/IntegrationContext';
+import { Pill, type PillTone } from '../ui/pill';
 
 export function ProviderLogo({
   provider,
@@ -36,45 +37,26 @@ export function ProviderLogo({
   );
 }
 
+/**
+ * Status now runs on the audited --pill-* tokens, so it retones with the theme
+ * instead of carrying its own light/dark pairs. "Running" reads as info blue
+ * because it is genuinely transient; everything settled uses ok/warn/error.
+ */
 export function StatusPill({ status }: { status: SyncStatus | 'connected' | 'not-connected' | 'draft' }) {
-  const map: Record<string, { label: string; cls: string; icon: ReactNode }> = {
-    connected: {
-      label: 'Connected',
-      cls: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-800',
-      icon: <CheckCircle2 className="h-3 w-3" />,
-    },
-    'not-connected': {
-      label: 'Not Connected',
-      cls: 'bg-gray-100 text-gray-500 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700',
-      icon: <CircleDashed className="h-3 w-3" />,
-    },
-    draft: {
-      label: 'Setup in progress',
-      cls: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:border-amber-800',
-      icon: <CircleDashed className="h-3 w-3" />,
-    },
-    completed: {
-      label: 'Completed',
-      cls: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 dark:border-emerald-800',
-      icon: <CheckCircle2 className="h-3 w-3" />,
-    },
-    running: {
-      label: 'Running',
-      cls: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-400 dark:border-blue-800',
-      icon: <Loader2 className="h-3 w-3 animate-spin" />,
-    },
-    failed: {
-      label: 'Failed',
-      cls: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-800',
-      icon: <AlertCircle className="h-3 w-3" />,
-    },
+  const map: Record<string, { label: string; tone: PillTone; icon: LucideIcon; spin?: boolean }> = {
+    connected: { label: 'Connected', tone: 'ok', icon: CheckCircle2 },
+    'not-connected': { label: 'Not Connected', tone: 'neutral', icon: CircleDashed },
+    draft: { label: 'Setup in progress', tone: 'warn', icon: CircleDashed },
+    completed: { label: 'Completed', tone: 'ok', icon: CheckCircle2 },
+    running: { label: 'Running', tone: 'info', icon: Loader2, spin: true },
+    failed: { label: 'Failed', tone: 'error', icon: AlertCircle },
   };
   const s = map[status];
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-xs font-medium ${s.cls}`}>
-      {s.icon}
+    <Pill tone={s.tone} size="md">
+      <s.icon className={`h-3 w-3 ${s.spin ? 'animate-spin' : ''}`} />
       {s.label}
-    </span>
+    </Pill>
   );
 }
 

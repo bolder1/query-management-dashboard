@@ -36,7 +36,7 @@ export function DashboardHeader() {
             >
               {item}
               {item === 'Integrations' && connectedCount > 0 && (
-                <span className="text-xs bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 rounded-full px-1.5">
+                <span style={{backgroundColor:`var(--pill-accent-bg)`,color:`var(--pill-accent-text)`}} className="text-xs  rounded-full px-1.5">
                   {connectedCount}
                 </span>
               )}

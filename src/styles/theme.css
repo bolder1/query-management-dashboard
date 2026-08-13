@@ -185,6 +185,70 @@
   --toast-warning-bg: #fffbeb;
   --toast-warning-border: #fde68a;
   --toast-warning-text: #92400e;
+
+  /* ==========================================================================
+     Purple Ignite — the accent language
+     --------------------------------------------------------------------------
+     Blue (--brand) is the ACTION colour: buttons, links, and the on state of
+     any control. Purple is the ACCENT colour: pills, tags, counts, section
+     anchors — things that carry information rather than do something.
+
+     A filter chip sits on the line between the two, and it lands on blue: it
+     is a control, and its selected state is a thing you did. Purple stays on
+     the static badges beside it, so the two never blur together.
+
+     Every text-on-background pair below was measured against this project's own
+     surfaces (#ffffff card, #f7f8f9 page) and clears WCAG AA 4.5:1 — pills run
+     at 10-11px, so the large-text exemption does not apply.
+
+     Two deliberate choices:
+
+     1. The accent is violet-700 (#6d28d9), not violet-600 (#7c3aed). Against
+        --brand #2563eb, violet-600 differs by only 1.1:1 in luminance — nearly
+        hue-only separation, which fails anyone with reduced colour
+        discrimination. violet-700 widens it to 1.37:1.
+
+     2. The fill is violet-100 (#ede9fe), not violet-50. Violet-50 separated
+        from --surface-page (#f7f8f9) by just 1.03:1, so a pill sitting on a
+        recessed surface all but vanished. violet-100 gives 1.19:1 on card and
+        1.12:1 on page while keeping text at 5.98:1.
+
+     --pill-*-line is decorative definition, not a load-bearing boundary: a
+     pill's meaning comes from its text label, which clears AA on its own. So
+     WCAG 1.4.11's 3:1 does not bind here — hitting it would need violet-500
+     and read as a harsh outline.
+     ========================================================================== */
+  --pill-accent-bg: #ede9fe;
+  --pill-accent-text: #6d28d9;        /* 5.98:1 on --pill-accent-bg */
+  --pill-accent-line: #ddd6fe;
+  --pill-accent-icon: #7c3aed;
+  --pill-accent-solid-bg: #6d28d9;
+  --pill-accent-solid-text: #ffffff;  /* 7.10:1 */
+
+  /* Semantic pills, retoned to sit alongside the purple as one family. */
+  --pill-ok-bg: #ecfdf5;
+  --pill-ok-text: #065f46;            /* 6.68:1 */
+  --pill-ok-line: #a7f3d0;
+  --pill-warn-bg: #fffbeb;
+  --pill-warn-text: #92400e;          /* 6.94:1 */
+  --pill-warn-line: #fde68a;
+  --pill-error-bg: #fef2f2;
+  --pill-error-text: #991b1b;         /* 8.03:1 */
+  --pill-error-line: #fecaca;
+  --pill-info-bg: #eff6ff;
+  --pill-info-text: #1e40af;          /* 8.03:1 */
+  --pill-info-line: #bfdbfe;
+  --pill-neutral-bg: #eef0f2;
+  --pill-neutral-text: #4a5058;       /* 7.44:1 */
+  --pill-neutral-line: #e4e7ea;
+
+  /* Categorical ramp for charts and meters. Purple leads, blue supports. */
+  --viz-1: #6d28d9;
+  --viz-2: #2563eb;
+  --viz-3: #0e7490;
+  --viz-4: #b45309;
+  --viz-5: #be185d;
+  --viz-track: #eef0f2;
 }
 
 .dark {
@@ -252,6 +316,41 @@
   --toast-warning-bg: #201a0d;
   --toast-warning-border: #78350f;
   --toast-warning-text: #fcd34d;
+
+  /* Purple Ignite, dark mode. Tinted pill backgrounds are a violet flattened
+     over the card surface rather than a translucent layer, so a pill reads the
+     same on --surface-card (#141414) and --surface-page (#0a0a0a).
+     Measured against both: 8.88:1 on card, 9.68:1 on page. */
+  --pill-accent-bg: #251a37;          /* #7c3aed at 16% over #141414 */
+  --pill-accent-text: #c4b5fd;        /* 8.88:1 on card, 9.68:1 on page */
+  --pill-accent-line: #3c2a5c;
+  --pill-accent-icon: #a78bfa;
+  --pill-accent-solid-bg: #7c3aed;
+  --pill-accent-solid-text: #ffffff;  /* 5.70:1 */
+
+  --pill-ok-bg: #0d2a20;
+  --pill-ok-text: #6ee7b7;            /* 8.94:1 */
+  --pill-ok-line: #1c4a38;
+  --pill-warn-bg: #2b2010;
+  --pill-warn-text: #fcd34d;          /* 10.29:1 */
+  --pill-warn-line: #4a3a18;
+  --pill-error-bg: #2d1618;
+  --pill-error-text: #fca5a5;         /* 7.36:1 */
+  --pill-error-line: #532629;
+  --pill-info-bg: #14243d;
+  --pill-info-text: #93c5fd;          /* 7.87:1 */
+  --pill-info-line: #1e3a5f;
+  --pill-neutral-bg: #1f1f1f;
+  --pill-neutral-text: #a6a6a6;       /* 5.30:1 */
+  --pill-neutral-line: #2f2f2f;
+
+  /* Lifted for dark surfaces — the light-mode ramp goes muddy on near-black. */
+  --viz-1: #a78bfa;
+  --viz-2: #60a5fa;
+  --viz-3: #22d3ee;
+  --viz-4: #fbbf24;
+  --viz-5: #f472b6;
+  --viz-track: #1f1f1f;
 }
 
 [data-sonner-toast] [data-description] {
@@ -349,4 +448,15 @@
     font-weight: var(--font-weight-normal);
     line-height: 1.5;
   }
+}
+
+/* A record landing in the import table — it arrives, it does not blink in. */
+@keyframes qm-row-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.qm-row-in { animation: qm-row-in 0.35s ease-out backwards; }
+
+@media (prefers-reduced-motion: reduce) {
+  .qm-row-in { animation: none; }
 }
