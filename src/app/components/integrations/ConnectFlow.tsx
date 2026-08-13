@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Check, Loader2, ShieldCheck, ArrowRight, Circle } from 'lucide-react';
 import { Button } from '../ui/button';
-import { Trail } from '../ui/trail';
 import { toast } from 'sonner';
 import {
   useIntegrations, PROVIDERS, MOCK_PROJECTS,
@@ -148,17 +147,6 @@ export function ConnectFlow() {
         <div className="shrink-0 flex items-start gap-3 px-5 py-4 border-b border-gray-200 dark:border-gray-800">
           <ProviderLogo provider={provider} size={36} />
           <div className="min-w-0 flex-1">
-            {/* Where this sits, even though it opens over the page: connecting
-                is the first step of the same setup the integration's page
-                carries on with. */}
-            <Trail
-              className="-ml-1.5 mb-0.5"
-              items={[
-                { label: 'Integrations' },
-                { label: provider.name },
-                { label: phase === 'project' ? 'Setup · Project' : 'Setup · Connect' },
-              ]}
-            />
             <h2 className="text-[15px] font-semibold text-gray-900 dark:text-white">
               {phase === 'project' ? 'Which project should we sync?' : `Connect ${provider.name}`}
             </h2>
