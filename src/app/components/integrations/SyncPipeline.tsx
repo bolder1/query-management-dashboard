@@ -60,7 +60,7 @@ export function SyncPipeline({
             }`}
             style={{ left: `calc(${Math.min(conn.progress, 92)}% )` }}
           >
-            {conn.progress}%
+            {Math.floor(conn.progress)}%
           </span>
         </div>
 

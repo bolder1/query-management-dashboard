@@ -166,7 +166,7 @@ export function MigrationTakeover() {
             {/* Progress */}
             <div className="mt-6">
               <div className="flex items-baseline justify-between gap-3 text-sm">
-                <span className="tabular-nums font-semibold">{Math.round(conn.progress)}%</span>
+                <span className="tabular-nums font-semibold">{Math.floor(conn.progress)}%</span>
                 <span className="text-white/45 tabular-nums">
                   {conn.syncing ? (eta ? remaining(eta) : 'estimating…') : clock(elapsed)}
                 </span>
@@ -294,7 +294,7 @@ export function MigrationTakeover() {
               <>
                 <p className="flex items-center gap-2 text-sm text-amber-300 min-w-0">
                   <AlertTriangle className="h-4 w-4 shrink-0" />
-                  Stopped at {Math.round(conn.progress)}%
+                  Stopped at {Math.floor(conn.progress)}%
                 </p>
                 <button
                   onClick={finishMigration}

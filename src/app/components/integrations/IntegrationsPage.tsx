@@ -467,7 +467,7 @@ function ConnectedCard({
             {conn.syncing && (
               <span className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400">
                 <Loader2 className="h-3 w-3 animate-spin" />
-                {conn.progress}%
+                {Math.floor(conn.progress)}%
               </span>
             )}
           </div>

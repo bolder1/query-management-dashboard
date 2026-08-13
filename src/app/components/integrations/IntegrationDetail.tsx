@@ -207,7 +207,7 @@ export function IntegrationDetail({ providerId }: { providerId: ProviderId }) {
                 {conn.syncing
                   ? <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
                   : <Play className="h-3.5 w-3.5 mr-1.5" />}
-                {conn.syncing ? `Syncing ${conn.progress}%` : neverSynced ? 'Start first sync' : 'Sync now'}
+                {conn.syncing ? `Syncing ${Math.floor(conn.progress)}%` : neverSynced ? 'Start first sync' : 'Sync now'}
               </Button>
               <div className="relative">
                 <Button
